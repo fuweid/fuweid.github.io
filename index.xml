@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8" standalone="yes"?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom">
+  <channel>
+    <title>Wei Fu</title>
+    <link>/</link>
+    <description>Recent content on Wei Fu</description>
+    <generator>Hugo -- gohugo.io</generator>
+    <lastBuildDate>Sun, 19 Mar 2017 00:00:00 +0800</lastBuildDate>
+    
+	<atom:link href="/index.xml" rel="self" type="application/rss+xml" />
+    
+    
+    <item>
+      <title>shebang - #!</title>
+      <link>/post/2017-shebang-compatibility-version/</link>
+      <pubDate>Sun, 19 Mar 2017 00:00:00 +0800</pubDate>
+      
+      <guid>/post/2017-shebang-compatibility-version/</guid>
+      <description>写脚本的时候通常会在脚本的开头加上 shebang, 系统会将这段内容作为解释器指令，比如 bash shell 脚本。
+$&amp;gt; cat example #!/usr/bin/bash echo &amp;quot;HaHa&amp;quot; $&amp;gt; chmod +x ./example $&amp;gt; ./example HaHa 只要为脚本添加了可执行的属性，那么内核在执行脚本的时候，会调用 shebang 描述的解释器来执行脚本。 ./exmaple 其实等价于 /usr/bin/bash ./example。shebang 描述的解释器需要写其绝对路径或者相对路径，因为内核并不会在用户设置的 PATH 里找解释器。关于 shebang，讨论最多的应该是 兼容性 和 版本控制 问题。
+兼容性 Linux 和 Unix 在存放解释器的具体路径不太一致，比如 Linux 会放到 /usr/bin/ 中，而 openBSD 会放到 /usr/local/bin/ 中。不同包管理器在安装解释器的时候，存放的位置也不尽相同。 当你在 Mac 上写了 shell 脚本，测试并提交到代码库。 结果等到部署的那一天，执行脚本的时候发现找不到解释器了。 为了解决这个问题，可以通过 env 来解决，因为它在 Linux 和 Unix 存放的位置相同。
+$&amp;gt; cat exmaple #!/usr/bin/env bash echo &amp;#34;HaHa&amp;#34; env 会在用户设置的 PATH 中查找解释器第一次出现的具体路径。 虽然办法比较 tricky，但是这种方式能解决脚本解释器的兼容性问题。</description>
+    </item>
+    
+  </channel>
+</rss>

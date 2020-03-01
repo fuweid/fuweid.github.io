@@ -1,0 +1,287 @@
+/*
+ * Based on https://github.com/jessfraz/blog/blob/master/static/css/main.css
+ * Git commit: ee8f629deb64e5780764c94870392c19722882e9
+ *
+ * Modified: font-family, color and styles!
+*/
+
+/* about basic header */
+h1,
+h2,
+h3,
+h4,
+h5,
+h6 {
+    margin: 0.85 0;
+    font-weight: normal;
+    line-height: 100%;
+    color: inherit;
+}
+
+h1 {
+    font-size: 45px;
+}
+
+h2 {
+    font-size: 35px;
+}
+
+h3 {
+    font-size: 25px;
+}
+
+h4 {
+    font-size: 20px;
+}
+
+h5 {
+    font-size: 15px;
+}
+
+h6 {
+    font-size: 10px;
+}
+
+body {
+	font-family: Helvetica Neue, Arial, sans-serif;
+}
+
+/* about container class which used for home and single page */
+.container {
+    overflow: hidden;
+    position: relative;
+    max-width: 750px;
+    margin: 0 auto;
+    text-align: left;
+	line-height: 1.8;
+    padding: 80px 30px 80px 30px;
+	scroll-margin-top: 50px;
+}
+
+/* about time format */
+.time {
+	color: #c0c0c0;
+    display: block;
+}
+
+/* about article time format in home page */
+.home.time {
+    margin-top: 10px;
+}
+
+/* about article time format in single page */
+.single.time {
+    margin-top: 10px;
+	margin-bottom: 30px;
+}
+
+article.single {
+	margin-top: 60px;
+}
+
+/* about article title format in single page */
+article.single .title {
+    color: #00aeff;
+}
+
+/* about header part */
+header {
+    top: 0px;
+    left: 0px;
+    display: block;
+    position: fixed;
+    background: rgba(255, 255, 255);
+    box-shadow: 0 2px 20px rgba(128, 128, 128);
+    padding: 10px 15px 10px 15px;
+    text-align: center;
+    width: calc(100% - 20px);
+    z-index: 999999;
+    height: 30px;
+}
+
+header nav {
+    position: relative;
+    width: 100%;
+    margin: 0;
+    padding: 0;
+    font-size: 18px;
+}
+
+header nav ul {
+    position: relative;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+}
+
+header nav ul.home {
+    float: left;
+    font-weight: 400;
+    font-size: 20px;
+}
+
+header nav ul li {
+    display: inline-block;
+}
+
+header nav ul li a {
+    line-height: 30px;
+    border-bottom: none;
+}
+
+header nav ul.social {
+    float: right;
+}
+
+header nav ul.social li {
+    margin: 5px 10px;
+}
+
+/* about link */
+a {
+    color: #00aeff;
+    text-decoration: none;
+}
+
+a:hover,
+a:focus {
+	color: #1e90ff;
+}
+
+/* about footer part */
+footer {
+	position: relative;
+	color: #c0c0c0;
+    text-align: center;
+	font-size: 10px;
+	padding-bottom: 80px;
+}
+
+/* for single page */
+
+/* about markdown paragraph */
+.single p {
+    margin: 15px 0px 20px 0px;
+}
+
+/* about markdown inline code */
+.single code {
+    padding: 2px 4px;
+    color: #1e90ff;
+	background-color: #f7f7f9;
+	border: 1px solid #dddddd;
+}
+
+/* code markdown code block */
+.single pre {
+	display: block;
+	padding-top: 10px;
+    font-size: 15px;
+    color: #333333;
+    background-color: #f7f7f9;
+    border: 1px solid #dddddd;
+    line-height: 150%;
+	box-shadow: 5px 5px 5px #eee;
+}
+
+.single pre > code {
+    padding: 0px;
+    color: inherit;
+    background-color: transparent;
+    border: 0px; /* remove block border: */
+}
+
+.single pre.prettyprint {
+	/* override code-prettyprint border style */
+    border: 1px solid #dddddd;
+    border-left: 10px solid #c0c0c0;
+	padding-left: 10px;
+}
+
+/* about markdown blockquote */
+.single blockquote {
+    padding: 0px 0px 0px 13px;
+    margin: 0px 0px 0px 0px;
+    border-left: 7px solid #eeeeee;
+}
+
+.single blockquote > p {
+    margin-bottom: 0px;
+    line-height: 1.8;
+    color: #555555;
+}
+
+/* about markdown lists */
+.single ul,
+.single ol {
+    padding: 0px;
+    margin: 15px 0 20px 15px;
+}
+
+.single ul ul,
+.single ul ol,
+.single ol ol,
+.single ol ul {
+    margin-bottom: 0px;
+}
+
+.single li {
+    margin: 0px 0px 10px 0px;
+}
+
+.single ul.unstyled,
+.single ol.unstyled {
+    margin-left: 0px;
+    list-style: none;
+}
+
+/* about markdown table */
+.single table {
+    width: 100%;
+    max-width: 100%;
+    margin: 10px 0px 20px 0px;
+    display: block;
+    border-collapse: collapse;
+    background-color: #ffffff;
+}
+
+.single table > thead > tr > th,
+.single table > thead > tr > td,
+.single table > tbody > tr > th,
+.single table > tbody > tr > td,
+.single table > tfoot > tr > th,
+.single table > tfoot > tr > td {
+    padding: 8px;
+    line-height: 1.42857143;
+    vertical-align: top;
+    border-top: 1px solid #dddddd;
+}
+
+.single table > thead > tr > th {
+    text-align: left;
+    vertical-align: bottom;
+    border-top: 0px;
+    border-bottom: 3px solid #dddddd;
+}
+
+/* about markdown image */
+.single img {
+    margin-left: auto;
+    margin-right: auto;
+    margin-bottom: 40px;
+    text-align: center;
+    max-width: 100%;
+    max-height: auto;
+    display: block;
+}
+
+/* about markdown header */
+.single h1,
+.single h2,
+.single h3,
+.single h4,
+.single h5,
+.single h6 {
+	margin-top: 25px;
+	margin-bottom: 25px;
+}
