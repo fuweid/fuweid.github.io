@@ -1,0 +1,268 @@
+<!DOCTYPE html>
+<html>
+	<head>
+	<meta charset="utf-8" />
+	<meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+	<title>Wei Fu </title>
+
+	<link rel="stylesheet" href="/css/fontawesome/all.css" />
+	<link rel="stylesheet" href="/css/main.css" /> 
+	<link rel="stylesheet" href="/css/normalize.css">
+	<link rel="stylesheet" href="/css/prettify.css">
+    <script type="text/javascript" src="/js/prettify.js"></script>
+</head>
+
+
+	<body onload="doPrettify()">
+		<header>
+	<nav>
+		<ul class="home">
+			<li>
+				<a href="https://fuweid.com">Wei Fu</a>
+			</li>
+		</ul>
+		<ul class="social">
+			<li>
+				<a class="fab fa-github" href="https://github.com/fuweid" target="_blank"></a>
+			</li>
+			<li>
+				<a class="fab fa-twitter" href="https://twitter.com/fuweid89" target="_blank"></a>
+			</li>
+		</ul>
+	</nav>
+</header>
+
+
+		<div class="container">
+			<article class="single">
+				<h2 class="title"> 让你的 shell 脚本变得可控 </h2>
+				<h5 class="time"> March 20, 2017 </h5>
+				<p>刚开始接触 shell 脚本的时候，最痛苦的地方在于出了问题，却不容易定位问题。</p>
+<p>shell 脚本遇到错误，“大部分” 情况下都会继续执行剩下的命令，最后返回 Zero <a href="https://en.wikipedia.org/wiki/Exit_status">Exit Code</a>  并不代表着结果正确。</p>
+<p>这让人很难发现问题，它不像其他脚本语言，遇到 <code>语法错误</code> 和 <code>typo</code> 等错误时便会立即退出。</p>
+<p>如果想要写出容易维护、容易 debug 的 shell 脚本，我们就需要让 shell 脚本变得可控。</p>
+<h3 id="set--e">set -e</h3>
+<p>默认情况下，shell 脚本遇到错误并不会立即退出，它还是会继续执行剩下的命令。</p>
+<pre><code>[root@localhost ~]# cat example
+#!/usr/bin/env bash
+# set -e
+
+sayhi # this command is not available.
+echo &quot;sayhi&quot;
+[root@localhost ~]# ./example
+./example: line 4: sayhi: command not found
+sayhi
+</code></pre><p>我们知道 Linux/Unix 用户等于系统的时候，内核会加载 <code>.bashrc</code> 或者 <code>.bash_profile</code> 里的配置。</p>
+<blockquote>
+<p>不同 shell 版本会使用不同的 rc/profile 文件，比如 zsh 版本的 rc 文件名是 .zshrc。</p>
+</blockquote>
+<p>简单设想下，假如 shell 脚本遇到错误就退出，那么只要这些文件里有 typo 等错误，该用户就永远登陆不了系统。</p>
+<blockquote>
+<p>在此，并没有考究默认行为的设计缘由，只是想表达 shell 脚本默认行为会让脚本变得不可控。</p>
+</blockquote>
+<p><code>set -e</code> 能会让 shell 脚本遇到 Non-Zero Exit Code 时，会立即停止执行。</p>
+<pre><code>[root@localhost ~]# cat example
+#!/usr/bin/env bash
+set -e
+
+sayhi # this command is not available.
+echo &quot;sayhi&quot;
+[root@localhost ~]# ./example
+./example: line 4: sayhi: command not found
+</code></pre><h3 id="set--u">set -u</h3>
+<p>初始化后再使用变量，这是好的编程习惯。</p>
+<p>但在默认情况下，shell 脚本使用未初始化的变量并不会报错。</p>
+<pre><code>[root@localhost ~]# cat example
+#!/usr/bin/env bash
+# set -u
+
+echo &quot;Hi, ${1}&quot;
+[root@localhost ~]# ./example
+Hi,
+[root@localhost ~]# echo $?
+0
+</code></pre><p>若脚本设置 <code>set -u</code> ，一旦使用没有初始化的变量或者 <code>positional parameter</code> 时，脚本将立即返回 1 Exit Code。</p>
+<pre><code>[root@localhost ~]# cat example
+#!/usr/bin/env bash
+set -u
+
+echo &quot;Hi, ${1}&quot;
+[root@localhost ~]# ./example
+./example: line 4: 1: unbound variable
+[root@localhost ~]# echo $?
+1
+</code></pre><blockquote>
+<p>需要说明的是，对于预定义的 <code>$@</code>, <code>$*</code> 等这些变量，是可以正常使用。</p>
+</blockquote>
+<p>为了避免使用未初始化的变量，常使用 <code>${VAR:-DEFAULT}</code> 来设置默认值。</p>
+<pre><code>#!/usr/bin/env bash
+set -u
+
+# ${VAR:-DEFAULT} evals to DEFAULT if VAR undefined.
+foo=${nonexisting:-ping}
+
+echo &quot;${foo}&quot; # =&gt; ping
+
+bar=&quot;pong&quot;
+
+foo=${bar:-ping}
+
+echo &quot;${foo}&quot; # =&gt; pong
+
+# DEFAULT can be empty
+empty=${nonexisting:-}
+
+echo &quot;${empty}&quot; # =&gt; ''
+</code></pre><h3 id="set--o-pipefail">set -o pipefail</h3>
+<p>在默认情况下，<code>pipeline</code> 会采用最后一个命令的 Exit Code 作为最终返回的 Exit Code。</p>
+<pre><code>[root@localhost ~]# cat example
+#!/usr/bin/env bash
+# set -o pipefail
+
+grep string /non-existing-file | sort
+[root@localhost ~]# ./example
+grep: /non-existing-file: No such file or directory
+[root@localhost ~]# echo $?
+0
+</code></pre><p>明明报错了，为什么还会返回 Zero Exit Code?</p>
+<p><code>grep</code> 一个并不存在的文件会返回 2 Exit Code。<code>grep</code> 不仅会输出错误信息到 <code>STDERR</code> 上，还会输出空的字符串到 <code>STDOUT</code>。对于 <code>sort</code> 命令而言，空字符串是合法的输入，所以最后命令返回 Zero Exit Code。</p>
+<p>这样错误信息并不能很好地帮助我们改善脚本，返回的 Exit Code 应该要尽可能地反映错误现场。</p>
+<p>和前面两个设置一样，<code>set -o pipefail</code> 会让 shell 脚本在 <code>pipeline</code> 过程遇到错误便立即返回相应错误的 Exit Code。</p>
+<pre><code>[root@localhost ~]# cat example
+#!/usr/bin/env bash
+set -o pipefail
+
+grep string /non-existing-file | sort
+[root@localhost ~]# ./example
+grep: /non-existing-file: No such file or directory
+[root@localhost ~]# echo $?
+2
+</code></pre><h3 id="non-zero-exit-code-is-expected">non-zero exit code is expected</h3>
+<p>这三个配置太过于苛刻，某些情况下还需要放宽这些限制：当程序可以接受 non-zero exit code 时。</p>
+<p>这里有两种常用的方式去放宽限制：</p>
+<h4 id="set-">set +</h4>
+<p>这里有一个脚本是用来产生长度为 64 的随机字符串：</p>
+<pre><code>root@localhost ~]# cat example
+#!/usr/bin/env bash
+set -euo pipefail
+
+str=$(cat /dev/urandom | tr -dc '0-9A-Za-z' | head -c 64)
+
+echo &quot;${str}&quot;
+
+[root@localhost ~]# ./example
+[root@localhost ~]# echo $?
+141
+</code></pre><p>该脚本有一个问题，就是 <code>head</code> 命令在获取到第 64 个字节之后，会关闭 <code>STDIN</code>，但是 <code>pipe</code> 还在不断地输出，导致内核不得不抛出 <code>SIGPIPE</code> 来终止命令。</p>
+<p>因为设置 <code>set -o pipefail</code> 了 ，整个脚本因为 <code>SIGPIPE</code> 会退出。</p>
+<p>假设该脚本剩下命令还很多，不能整体去掉 <code>pipefail</code> ，那么我们就局部放弃这个限制好了。</p>
+<pre><code>[root@localhost ~]# cat example
+#!/usr/bin/env bash
+# exit immediately if non-zero exit code/unset variable/pipe error
+set -euo pipefail
+
+# loosen up
+set +o pipefail
+str=$(cat /dev/urandom | tr -dc '0-9A-Za-z' | head -c 64)
+set -o pipefail
+
+echo &quot;${str}&quot;
+
+[root@localhost ~]# ./example
+pvScFHDZrdjlI091rQbruyEPM9e6iTN59IyzaKcCJwiCxYmiSNRmkFOfp0YuXi1C
+[root@localhost ~]# echo $?
+0
+</code></pre><p>同理，只要设置上 <code>set +e</code> 或者 <code>set +u</code> 时，就会放宽相应的限制。</p>
+<p>记得 <strong>有借有还，再借不难</strong> 就好了。</p>
+<h4 id="短路运算">短路运算</h4>
+<p>现在有一个脚本，该脚本用来统计文件 <code>file</code> 中有多少行是包含了 <code>string</code> 这个字符串。</p>
+<pre><code>root@localhost ~]# cat example
+#!/usr/bin/env bash
+set -euo pipefail
+
+count=$(grep -c string ./file)
+
+echo &quot;${count}&quot;
+
+[root@localhost ~]# ./example
+[root@localhost ~]# echo $?
+1
+[root@localhost ~]# cat ./file
+example
+</code></pre><p>因为文件 <code>file</code> 中并不包含 <code>string</code> 这一字符串，所以 <code>grep</code> 返回 1 Exit Code。</p>
+<p>假设遇到没有匹配上的文件，该脚本应该显示零，而不是错误。</p>
+<p><code>$(cmd || true)</code> 短路运算会让该命令永远都正常执行。</p>
+<pre><code>[root@localhost ~]# cat example
+#!/usr/bin/env bash
+set -euo pipefail
+
+count=$(grep -c string ./file || true)
+
+echo &quot;${count}&quot;
+
+[root@localhost ~]# ./example
+0
+[root@localhost ~]# echo $?
+0
+</code></pre><h3 id="思考">思考</h3>
+<p>shell 脚本能帮助我们轻松地完成自动化的任务，这是它的优势。</p>
+<p>但是劣势也比较明显，就是 shell 脚本的返回值。我们来看看下面的一个例子。</p>
+<p>相对于 <code>if/else</code>, 短路运算可以让代码变得简洁。</p>
+<p>但是一旦最终的判断结果为否，那么该短路运算将会返回 Non-Zero Exit Code。</p>
+<p>假如有一个脚本的最后一条命令是短路运算。</p>
+<pre><code>[root@localhost ~]# cat ./echo_filename
+#!/usr/bin/env bash
+set -euo pipefail
+
+file=${1:-}
+
+[[ -f &quot;${file}&quot; ]] &amp;&amp; echo &quot;File: ${file}&quot;
+[root@localhost ~]# ./echo_filename
+[root@localhost ~]# echo $?
+1
+</code></pre><p>如果没有传参数，那么短路运算将会返回 1 Exit Code，这个结果也将作为整个脚本的返回结果。</p>
+<blockquote>
+<p>需要说明的是，虽然短路运算返回的 Non-Zero Exit Code，但 <code>set -e</code> 不会因为它而退出。</p>
+</blockquote>
+<p>然后我们再看看使用 <code>if/else</code> 的结果。</p>
+<pre><code>[root@localhost ~]# cat echo_filename
+#!/usr/bin/env bash
+set -euo pipefail
+
+file=${1:-}
+
+if [[ -f &quot;${file}&quot; ]]; then
+    echo &quot;File: ${file}&quot;
+fi
+[root@localhost ~]# ./echo_filename
+[root@localhost ~]# echo $?
+0
+</code></pre><p>从逻辑上来分析，即使不传参数，呈现的应该是空字符串，并返回 Zero Exit Code。</p>
+<p><code>if/else</code> 语句相对于短路运算要合理。</p>
+<p>我们别小看这一区别，如果这里有脚本调用 <code>echo_filename</code>，那么使用短路运算将会导致调用该脚本的脚本停止工作。</p>
+<p>归根结底，是因为 shell 脚本并不像其他语言那样支持返回多种数据类型，它只能返回数字的 Exit Code。</p>
+<p>这就代表着脚本的程序设计必须要考虑返回正确的 Exit Code，这样 <code>set -euo pipefail</code> 才能让脚本变得更加可控。</p>
+<blockquote>
+<p>关于 <code>set</code> 更多的内容，请前往 <a href="https://www.gnu.org/software/bash/manual/bashref.html#The-Set-Builtin">Link</a> 。</p>
+</blockquote>
+
+			</article>
+		</div>
+
+		<footer>
+	&copy; 2020 Wei Fu
+</footer>
+
+<script>
+	function doPrettify(){
+		pres=document.getElementsByTagName('pre');
+		for (i=0; i < pres.length; i++) {
+			pres[i].className+=" prettyprint";
+		}
+		prettyPrint();
+	}
+</script>
+
+	</body>
+</html>

@@ -36,8 +36,8 @@
 
 		<div class="container">
 			<article class="single">
-				<h1 class="title"> shebang - #! </h1>
-				<div class="single time"> March 19, 2017 </div>
+				<h2 class="title"> shebang - #! </h2>
+				<h5 class="time"> March 19, 2017 </h5>
 				<p>写脚本的时候通常会在脚本的开头加上 <a href="https://en.wikipedia.org/wiki/Shebang_(Unix)">shebang</a>, 系统会将这段内容作为解释器指令，比如 bash shell 脚本。</p>
 <pre><code>$&gt; cat example
 #!/usr/bin/bash
@@ -49,7 +49,7 @@ $&gt; ./example
 HaHa
 </code></pre><p>只要为脚本添加了可执行的属性，那么内核在执行脚本的时候，会调用 shebang 描述的解释器来执行脚本。
 <code>./exmaple</code> 其实等价于 <code>/usr/bin/bash ./example</code>。shebang 描述的解释器需要写其绝对路径或者相对路径，因为内核并不会在用户设置的 <code>PATH</code> 里找解释器。关于 shebang，讨论最多的应该是 <strong>兼容性</strong> 和 <strong>版本控制</strong> 问题。</p>
-<h2 id="兼容性">兼容性</h2>
+<h3 id="兼容性">兼容性</h3>
 <p>Linux 和 Unix 在存放解释器的具体路径不太一致，比如 Linux 会放到 <code>/usr/bin/</code> 中，而 openBSD 会放到 <code>/usr/local/bin/</code> 中。不同包管理器在安装解释器的时候，存放的位置也不尽相同。
 当你在 Mac  上写了 shell  脚本，测试并提交到代码库。
 结果等到部署的那一天，执行脚本的时候发现找不到解释器了。
@@ -59,7 +59,7 @@ HaHa
 <span class="nb">echo</span> <span class="s2">&#34;HaHa&#34;</span>
 </code></pre></div><p><code>env</code> 会在用户设置的 <code>PATH</code> 中查找解释器第一次出现的具体路径。
 虽然办法比较 tricky，但是这种方式能解决脚本解释器的兼容性问题。</p>
-<h2 id="版本控制">版本控制</h2>
+<h3 id="版本控制">版本控制</h3>
 <p><code>env</code> 会在用户配置的 <code>PATH</code> 中查找解释器第一次出现的具体路径。
 这个机制就说明这存在两个问题：</p>
 <ul>
@@ -67,7 +67,7 @@ HaHa
 <li>很难通过 <code>env</code> 的方式来做到版本控制</li>
 </ul>
 <p>所以有些人坚持不用 <code>/usr/bin/env cmd</code> 这种方式。</p>
-<h2 id="思考">思考</h2>
+<h3 id="思考">思考</h3>
 <p>从部署的角度看，线上机器的环境都是一致的，而且都是通过自动化脚本去安装各种依赖。
 版本控制较细，这种情况下，不太建议采用 <code>env</code> 这种方式。如果从开发者的角度看，
 还是希望脚本能做到兼容，毕竟开发者的环境千差万别，<code>env</code>  基本上能解决这一大痛点。</p>

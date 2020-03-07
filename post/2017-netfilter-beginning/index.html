@@ -1,0 +1,406 @@
+<!DOCTYPE html>
+<html>
+	<head>
+	<meta charset="utf-8" />
+	<meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+	<title>Wei Fu </title>
+
+	<link rel="stylesheet" href="/css/fontawesome/all.css" />
+	<link rel="stylesheet" href="/css/main.css" /> 
+	<link rel="stylesheet" href="/css/normalize.css">
+	<link rel="stylesheet" href="/css/prettify.css">
+    <script type="text/javascript" src="/js/prettify.js"></script>
+</head>
+
+
+	<body onload="doPrettify()">
+		<header>
+	<nav>
+		<ul class="home">
+			<li>
+				<a href="https://fuweid.com">Wei Fu</a>
+			</li>
+		</ul>
+		<ul class="social">
+			<li>
+				<a class="fab fa-github" href="https://github.com/fuweid" target="_blank"></a>
+			</li>
+			<li>
+				<a class="fab fa-twitter" href="https://twitter.com/fuweid89" target="_blank"></a>
+			</li>
+		</ul>
+	</nav>
+</header>
+
+
+		<div class="container">
+			<article class="single">
+				<h2 class="title"> Netfilter 初探 </h2>
+				<h5 class="time"> March 17, 2017 </h5>
+				<p>Linux 内核在 2.4.x 版本中正式引入 <a href="http://www.netfilter.org/">Netfilter</a> 模块，该模块负责网络数据包过滤和 <a href="https://en.wikipedia.org/wiki/Network_address_translation">Network Address Translation</a>。
+Netfilter 代表着一系列的 Hook ，被内核嵌入到 TCP/IP 协议栈中，数据包在穿梭协议栈时，Hook 会检查数据包，从而达到访问控制的作用。</p>
+<h3 id="规则链">规则链</h3>
+<p>Netfilter 模块默认定义了五种类型的 Hook：</p>
+<ul>
+<li>PREROUTING</li>
+<li>INPUT</li>
+<li>FORWARD</li>
+<li>OUTPUT</li>
+<li>POSTROUTING</li>
+</ul>
+<blockquote>
+<p>在 Netfilter 里，Hook 也称为 Chain，规则链</p>
+</blockquote>
+<p>我们可以从数据包的来源和走向入手来进行分析这条五条规则链的设计。
+首先，数据包按照来源可以分成 Incoming 和 Outgoing 这两种类型。
+Incoming 数据包是指其他网卡发来的数据包。这类数据包可能直接奔向用户态的程序，
+也有可能被内核转发到其他机器或者其他网卡上，这需要内核做路由判定。</p>
+<p>而 Outgoing 数据包是用户态程序准备要发送的数据包。
+数据包到达内核之后，内核会为它选择合适的网卡和端口，在此之后便会一层层地穿过协议栈，内核在此过程之中会做出路由判定。</p>
+<blockquote>
+<p>一般情况下，客户端所使用的高端口号。在 Linux 下，我们可以通过 <code>cat /proc/sys/net/ipv4/ip_local_port_range</code> 查看系统会随机使用的端口号范围。</p>
+</blockquote>
+<p>需要注意的是，如果这是内网和外网之间的通信，内核会使用到 NAT 技术来对地址进行转化。
+对于 Incoming 数据包而言，内核路由前需要对数据包进行 Destination NAT 转化。
+同理，数据包在路由之后也需要做 Source NAT 转化。</p>
+<p>根据上面的分析，可以得到以下结论：</p>
+<ul>
+<li>Incoming 数据包的目的地就在本地：PREROUTING -&gt; INPUT</li>
+<li>Incoming 数据包需要转发：PREROUTING -&gt; FORWARD -&gt; POSTROUTING</li>
+<li>Outgoing 数据包：OUTPUT -&gt; POSTROUTING</li>
+</ul>
+<p>不同走向的数据包都必定会通过以上五个环节中的部分环节，只要系统管理员在五个环节中设置关卡，就可以做到系统的访问控制。</p>
+<h3 id="功能表">功能表</h3>
+<p>为了更好地管理访问控制规则，Netfilter 制定 <strong>功能表</strong> 来定义和区分不同功能的规则。</p>
+<p>Netfilter 一共有五种功能表：</p>
+<ul>
+<li>raw: 当内核启动 <code>ip_conntrack</code> 模块以后，所有信息都会被追踪，raw 却是用来设置不追踪某些数据包</li>
+<li>mangle: 用来设置或者修改数据包的 IP 头信息</li>
+<li>nat: 用来设置主机的 NAT 规则，用来修改数据包的源地址和目的地址</li>
+<li>filter: 通常情况下，用来制定接收、转发、丢弃和拒绝数据包的规则</li>
+<li>security: 安全相关</li>
+</ul>
+<blockquote>
+<p>由于 filter 和 nat 基本能满足大部分的访问控制需求，加上篇幅的原因，接下来只会介绍 filter 和 nat 这两张功能表。</p>
+</blockquote>
+<p>不同的功能表有内置的规则链。</p>
+<ul>
+<li>filter: INPUT／OUTPUT ／FORWARD</li>
+<li>nat: PREROUTING ／INPUT／OUTPUT／POSTROUTING</li>
+</ul>
+<blockquote>
+<p>Linux 内核 2.6.34 开始给 nat 功能表引入了 INPUT 规则链，具体详情请查看 <a href="http://git.kernel.org/cgit/linux/kernel/git/torvalds/linux.git/commit/?id=c68cd6cc21eb329c47ff020ff7412bf58176984e">Commit</a>。</p>
+</blockquote>
+<p>不同来源的数据包的走向不同，触发的规则链也不同。</p>
+<h4 id="incoming-数据包">Incoming 数据包</h4>
+<pre><code>+----------------------+                               +-------------------------------------+
+| chain: PREROUTING    |                               | chain: INPUT                        |
+|                      |      +==================+     |                                     |      +===============+
+| table:               | --&gt;  + Routing Decision + --&gt; | table:                              | --&gt;  + Local Process +
+| raw -&gt; mangle -&gt; nat |      +=========+========+     | mangle -&gt; filter -&gt; security -&gt; nat |      +===============+
++----------------------+                |              +-------------------------------------+
+                                        |
+                                        v
+                        +------------------------------+     +---------------------+
+                        | chain: FORWARD               |     | chain: POSTROUTING  |
+                        |                              |     |                     |     +=========+
+                        | table:                       | --&gt; | table:              | --&gt; + Network +
+                        | mangle -&gt; filter -&gt; security |     | mangle -&gt; nat       |     +=========+
+                        +------------------------------+     +---------------------+
+</code></pre><blockquote>
+<p>为了能使 FORWARD 生效，请确保 <code>cat /proc/sys/net/ipv4/ip_forward</code> 为1。</p>
+</blockquote>
+<h4 id="outgoing-数据包">Outgoing 数据包</h4>
+<pre><code>+===============+     +==================+     +----------------------+     +==================+     +--------------------+      +----------------------+     +=========+
++ Local Process + --&gt; + Routing Decision + --&gt; | chain: OUTPUT        | --&gt; + Routing Decision + --&gt; | chain: OUTPUT      | --&gt;  | chain: POSTROUTING   | --&gt; + Network +
++===============+     +=========+========+     |                      |     +=========+========+     |                    |      |                      |     +=========+
+                                               | table:               |                              | table:             |      | table:               |
+                                               | raw -&gt; mangle -&gt; nat |                              | filter -&gt; security |      | mangle -&gt; nat        |
+                                               +----------------------+                              +--------------------+      +----------------------+
+</code></pre><p>第一个路由判定主要是收集数据发送前的必要信息，比如所要使用的网卡、IP 地址以及端口号。
+当数据包触发了协议栈中的规则链时，内核将会遍历不同的功能表（顺序如上图所示），比如 Incoming 数据包触发 PREROUTING 规则链时，内核会先执行 raw 功能表中的 PREROUTING 规则链，其次 mangle 功能表，最后才是 nat 功能表。
+Netfilter 还允许系统管理员创建自己的规则链，这样可以在内置的规则链中进一步划分规则。</p>
+<h3 id="规则">规则</h3>
+<p>功能表包含了多条规则链，而每一条规则链包含多条规则。</p>
+<p>规则包含了 <strong>匹配标准</strong> 和 <strong>具体动作</strong>。内核会依次遍历规则链中的规则。</p>
+<p>当数据包满足某一条规则的匹配标准时，内核将会执行规则所制定的具体动作。</p>
+<p>比如系统管理员设置了“来自a.b.c.d的连接可以接收”这样的一条规则，其中：</p>
+<ul>
+<li><strong>来自a.b.c.d的连接</strong> 指的是 匹配标准</li>
+<li><strong>接收</strong> 是 具体动作</li>
+</ul>
+<p>当具体动作只是用来 <strong>记录日志</strong> 或者 <strong>标记数据包</strong> 时，表明该动作不具有 <strong>终结</strong> 特性，内核还是会继续遍历规则链中剩下的规则。否则，当内核匹配上了具有终结特性动作的规则时，内核执行完具体动作之后，将停止遍历剩下的规则。</p>
+<blockquote>
+<p>具体动作分为 终结 和 非终结 两种类型，其中非终结类型使用较多的一种是跳到自定义的规则链上遍历规则。</p>
+<p>所谓终结特性是指不会影响到数据包的命运。所以条件越苛刻的规则应该放越前面。</p>
+</blockquote>
+<p>当规则链中没有规则，或者是数据包没有满足任何一条终结特性的规则时，内核将会采用规则链的 <strong>策略</strong> 来决定是否接收该数据包。</p>
+<p>策略一共有两种：接收和丢弃。从另外一个角度看，规则链的策略体现出访问控制策略的设计：<strong>通</strong> 和 <strong>堵</strong>。</p>
+<p>对于通策略而言，整个系统的大门是关闭着的，只有系统管理员赋予你权限才能访问。而堵则是整个系统的大门都是敞开着的，而规则将用来限制一些用户的访问。</p>
+<blockquote>
+<p>自定义的规则链并不存在策略，当出现没有规则匹配或者数据包不满足规则时，将会跳回上一级，类似于函数调用栈。</p>
+</blockquote>
+<h3 id="iptables">iptables</h3>
+<p>iptables 是 Netfilter 模块提供的命令接口，系统管理员可以通过它来配置各种访问控制规则。在定义规则时，可以参考以下模版。</p>
+<pre><code># list rules in one table
+# iptables -t table -nvL
+
+# 查看 nat 功能表下规则
+# iptables -t nat -nvL
+
+# append new rule
+# iptables [-t table] -A chain matchCretira -j action
+
+# 系统管理员要限制来自 a.b.c.d IP 地址的访问
+iptables -t filter -A INPUT -s a.b.c.d/n -j REJECT
+
+# delete rule
+# iptables [-t table] -D chain ruleNum
+
+# 需要删除 filter/OUTPUT 的第二条规则
+iptables -t filter -D OUTPUT 2
+</code></pre><p>常用的具体动作有：</p>
+<ul>
+<li>filter 功能表：ACCEPT／DROP／REJECT／RETURN／LOG</li>
+<li>nat 功能表：SNAT／DNAT／REJECT／MASQUERADE／LOG</li>
+</ul>
+<blockquote>
+<p><code>man iptables</code> 能提供很多信息。但说明文档始终没有更新 nat 功能表添加了 INPUT 规则链。。。</p>
+</blockquote>
+<h3 id="初体验">初体验</h3>
+<p>为了保护本地环境以及模拟多节点环境，以下实验过程都在虚拟机上运行，并在虚拟机上利用Docker 来模拟多节点的环境。</p>
+<pre><code># docker version | grep 'Version:' -B 1
+Client:
+ Version:         1.12.5
+--
+Server:
+ Version:         1.12.5
+</code></pre><p>整个网络模型如下图所示：</p>
+<pre><code>+---------------------------------------+
+| +----------------+ +----------------+ |
+| | Container #1   | | Container #2   | |
+| | IP: 172.17.0.2 | | IP: 172.17.0.3 | |
+| +-------------+--+ +--+-------------+ |
+|               |       |               |
+|               v       v               |
+|           +---+-------+----+          |
+|           | Bridge docker0 |          |
+|           | IP: 172.17.0.1 |          |
+|           +-------++-------+          |
+| The               ||                  |
+| Box     +--------------------+        |
++---------| Host-Only  Adapter |--------+
+          | IP: 192.168.33.100 |
+          +--------------------+
+</code></pre><p>整个网络将虚拟机作为防火墙，初始状态下，不开放任何端口，将 filter 的三条内置链的策略为 DROP。</p>
+<pre><code># iptables -t filter -P INPUT DROP
+# iptables -t filter -P OUTPUT DROP
+# iptables -t filter -P FOPWARD DROP
+</code></pre><p>设置完以后，你会发现你连 ping 都 ping 不通了。。。</p>
+<pre><code>$ wfu at wfu-mac in ~/workspace/docs
+$ ping -c 3 192.168.33.100
+PING 192.168.33.100 (192.168.33.100): 56 data bytes
+Request timeout for icmp_seq 0
+Request timeout for icmp_seq 1
+
+--- 192.168.33.100 ping statistics ---
+3 packets transmitted, 0 packets received, 100.0% packet loss
+</code></pre><p>接下来的任务是能在 Mac 本地访问虚拟机里的 Docker Container，其中 Container 的启动方式如下。</p>
+<pre><code># docker run -it -d ubuntu-nw python -m SimpleHTTPServer 8000
+3301547d70b356223688fd9e38a1925ba90028084a44775bf79422be624c486b
+
+# docker ps
+CONTAINER ID        IMAGE               COMMAND                  CREATED             STATUS              PORTS               NAMES
+3301547d70b3        ubuntu-nw           &quot;python -m SimpleHTTP&quot;   9 seconds ago       Up 8 seconds                            boring_borg
+</code></pre><h3 id="开放22端口">开放22端口</h3>
+<p>这台虚拟机默认是没有开启桌面。</p>
+<pre><code># stty size
+25 80
+</code></pre><p>在25 * 80这样的窗口里操作系统实在是太痛苦了。
+在不启动桌面的情况，有必要通过远程登陆来改善下体验。</p>
+<p>虚拟机上已经预先装好了ssh server，只需要开放22端口即可。</p>
+<pre><code># iptables -t filter -A INPUT -d 192.168.33.100 -p tcp --dport 22 -j ACCEPT
+# iptables -t filter -A OUTPUT -s 192.168.33.100 -p tcp --sport 22 -j ACCEPT
+</code></pre><p>为什么需要两条命令？</p>
+<p>回顾之前的内容，数据包穿过 INPUT 规则链后会被本地程序所消费。该数据包的生命周期就结束了，访问者接收到的数据包是本地程序所产生，这两者需要区分开。
+第一条命令是系统管理员发给访问者的数据包的通行证，数据包到达 ssh server 之后就不复存在了，通行证也就不存在了。
+ssh server 产生的数据包系统并不认识，它在穿过 OUTPUT 规则链时，如果没有通行证的话，就会被内核“吃掉”，永远都回不到访问者。
+这需要两边都打通才能形成一个回路。</p>
+<p>好了，马上登陆虚拟机。</p>
+<pre><code>$ wfu at wfu-mac in ~/workspace/docs
+$ ssh root@192.168.33.100
+root@192.168.33.100's password:
+Last login: Fri Mar  3 18:04:55 2017 from 192.168.33.1
+[root@localhost ~]# stty size
+72 278
+</code></pre><blockquote>
+<p>可以在必要的时候记录日志。</p>
+<p>比如 <code>iptables -t filter -I INPUT 1 -p icmp -j LOG --log-prefix 'filter-input:'</code>，只要 <a href="https://en.wikipedia.org/wiki/Internet_Control_Message_Protocol">ICMP</a> 数据包触发了 filter 功能表中的 INPUT 规则链，那么系统将会记录下该数据包的基本信息。</p>
+<p>然后通过 <code>tail -f /var/log/messages</code> 来查看日志。</p>
+</blockquote>
+<h3 id="如何访问容器">如何访问容器</h3>
+<p>在创建 Container 的时候，如果不制定 Network 类型，那么 Daemon 会自动将 Container 挂到 docker0 下面，并形成了一个 <code>172.17.0.0/16</code> 子网。</p>
+<pre><code># docker network ls
+NETWORK ID          NAME                DRIVER              SCOPE
+6786e7d4c36a        bridge              bridge              local
+f16e611d5715        host                host                local
+912ae96541e9        none                null                local
+
+# docker network inspect bridge
+[
+    {
+        &quot;Name&quot;: &quot;bridge&quot;,
+        &quot;Id&quot;: &quot;6786e7d4c36acbd9d359289f90bd737bfcb21e74a5e467769e45fa9f732954f2&quot;,
+        &quot;Scope&quot;: &quot;local&quot;,
+        &quot;Driver&quot;: &quot;bridge&quot;,
+        &quot;EnableIPv6&quot;: false,
+        &quot;IPAM&quot;: {
+            &quot;Driver&quot;: &quot;default&quot;,
+            &quot;Options&quot;: null,
+            &quot;Config&quot;: [
+                {
+                    &quot;Subnet&quot;: &quot;172.17.0.0/16&quot;,
+                    &quot;Gateway&quot;: &quot;172.17.0.1&quot;
+                }
+            ]
+        },
+        &quot;Internal&quot;: false,
+        &quot;Containers&quot;: {},
+        &quot;Options&quot;: {
+            &quot;com.docker.network.bridge.default_bridge&quot;: &quot;true&quot;,
+            &quot;com.docker.network.bridge.enable_icc&quot;: &quot;true&quot;,
+            &quot;com.docker.network.bridge.enable_ip_masquerade&quot;: &quot;true&quot;,
+            &quot;com.docker.network.bridge.host_binding_ipv4&quot;: &quot;0.0.0.0&quot;,
+            &quot;com.docker.network.bridge.name&quot;: &quot;docker0&quot;,
+            &quot;com.docker.network.driver.mtu&quot;: &quot;1500&quot;
+        },
+        &quot;Labels&quot;: {}
+    }
+]
+</code></pre><p>而 Mac 和 虚拟机在 <code>192.168.33.0/24</code> 子网内，想要在 Mac 访问虚拟机上的 Container，需要用 Destination NAT 转发请求，所以只需要关注 <code>PREROUTING</code>／<code>FORWARD</code> 这两条规则链即可。</p>
+<p>Docker Daemon 启动以后会自动在 Netfilter 添加访问控制规则。</p>
+<pre><code># iptables -t nat -nvL
+Chain PREROUTING (policy ACCEPT 0 packets, 0 bytes)
+ pkts bytes target     prot opt in     out     source               destination
+    0     0 DOCKER     all  --  *      *       0.0.0.0/0            0.0.0.0/0            ADDRTYPE match dst-type LOCAL
+
+Chain INPUT (policy ACCEPT 0 packets, 0 bytes)
+ pkts bytes target     prot opt in     out     source               destination
+
+Chain OUTPUT (policy ACCEPT 1 packets, 128 bytes)
+ pkts bytes target     prot opt in     out     source               destination
+    0     0 DOCKER     all  --  *      *       0.0.0.0/0           !127.0.0.0/8          ADDRTYPE match dst-type LOCAL
+
+Chain POSTROUTING (policy ACCEPT 1 packets, 128 bytes)
+ pkts bytes target     prot opt in     out     source               destination
+    0     0 MASQUERADE  all  --  *      !docker0  172.17.0.0/16        0.0.0.0/0
+
+Chain DOCKER (2 references)
+ pkts bytes target     prot opt in     out     source               destination
+    0     0 RETURN     all  --  docker0 *       0.0.0.0/0            0.0.0.0/0
+</code></pre><p>PREROUTING 规则链只有一条规则，只要目的地址是本地地址，就跳到 DOCKER 这条自定义规则链中。
+DOCKER 规则链中，只要数据包到达 docker0 网卡，就直接返回到上一层。</p>
+<p>Mac 发来的数据包不会直接到达 docker0 网卡，而是 enp0s8 网卡。所以需要在 DOCKER 规则链中添加对来自 <code>192.168.33.0/24</code> 的 Destination NAT 规则。</p>
+<blockquote>
+<p>nat 功能表中 OUTPUT 规则链是用来对本地数据进行 DNAT／REDIRECT 操作，因为系统内部的通信一般情况不会穿过 PREROUTING。而在 DOCKER 规则链中添加对外部地址的 DNAT 规则并不会在 OUTPUT 规则链中被匹配。</p>
+<p>一旦通信双方通过 nat 功能表建立连接，内核将不会使用 nat 功能表上的规则过滤该连接上的数据包。</p>
+</blockquote>
+<pre><code># ip addr
+1: lo: &lt;LOOPBACK,UP,LOWER_UP&gt; mtu 65536 qdisc noqueue state UNKNOWN qlen 1
+    link/loopback 00:00:00:00:00:00 brd 00:00:00:00:00:00
+    inet 127.0.0.1/8 scope host lo
+       valid_lft forever preferred_lft forever
+    inet6 ::1/128 scope host
+       valid_lft forever preferred_lft forever
+2: enp0s8: &lt;BROADCAST,MULTICAST,UP,LOWER_UP&gt; mtu 1500 qdisc pfifo_fast state UP qlen 1000
+    link/ether 08:00:27:20:9f:cb brd ff:ff:ff:ff:ff:ff
+    inet 192.168.33.100/24 brd 192.168.33.255 scope global enp0s8
+       valid_lft forever preferred_lft forever
+    inet6 fe80::a00:27ff:fe20:9fcb/64 scope link
+       valid_lft forever preferred_lft forever
+3: docker0: &lt;NO-CARRIER,BROADCAST,MULTICAST,UP&gt; mtu 1500 qdisc noqueue state DOWN
+    link/ether 02:42:c3:e1:87:ab brd ff:ff:ff:ff:ff:ff
+    inet 172.17.0.1/16 scope global docker0
+       valid_lft forever preferred_lft forever
+</code></pre><p>数据包经过 PREROUTING 规则链之后，被路由到了 FORWARD 规则链。</p>
+<p>数据包在 enp0s3 网卡与 docker0 网卡的转发，会匹配到 FORWARD 规则链的第3和第4条规则，这里不需要额外的配置。</p>
+<pre><code># iptables -t filter -xnvL
+Chain INPUT (policy ACCEPT 9 packets, 548 bytes)
+    pkts      bytes target     prot opt in     out     source               destination
+
+Chain FORWARD (policy ACCEPT 0 packets, 0 bytes)
+    pkts      bytes target     prot opt in     out     source               destination
+     108    13856 DOCKER-ISOLATION  all  --  *      *       0.0.0.0/0            0.0.0.0/0
+      58     3736 DOCKER     all  --  *      docker0  0.0.0.0/0            0.0.0.0/0
+       0        0 ACCEPT     all  --  *      docker0  0.0.0.0/0            0.0.0.0/0            ctstate RELATED,ESTABLISHED
+      50    10120 ACCEPT     all  --  docker0 !docker0  0.0.0.0/0            0.0.0.0/0
+       0        0 ACCEPT     all  --  docker0 docker0  0.0.0.0/0            0.0.0.0/0
+
+Chain OUTPUT (policy ACCEPT 7 packets, 744 bytes)
+    pkts      bytes target     prot opt in     out     source               destination
+
+Chain DOCKER (1 references)
+    pkts      bytes target     prot opt in     out     source               destination
+
+Chain DOCKER-ISOLATION (1 references)
+    pkts      bytes target     prot opt in     out     source               destination
+     108    13856 RETURN     all  --  *      *       0.0.0.0/0            0.0.0.0/0
+</code></pre><p>根据上面的分析，我们只需要添加下面一条规则，便可访问该 Container。</p>
+<pre><code># iptables -t nat -A DOCKER -p tcp -i enp0s8 -d 192.168.33.100 --dport 80 -j DNAT --to-destination 172.17.0.2:8000
+</code></pre><p>访问结果如下。</p>
+<pre><code>$ wfu at wfu-mac in ~/workspace/docs
+$ curl 192.168.33.100
+&lt;!DOCTYPE html PUBLIC &quot;-//W3C//DTD HTML 3.2 Final//EN&quot;&gt;&lt;html&gt;
+&lt;title&gt;Directory listing for /&lt;/title&gt;
+&lt;body&gt;
+&lt;h2&gt;Directory listing for /&lt;/h2&gt;
+&lt;hr&gt;
+&lt;ul&gt;
+&lt;li&gt;&lt;a href=&quot;.dockerenv&quot;&gt;.dockerenv&lt;/a&gt;
+&lt;li&gt;&lt;a href=&quot;bin/&quot;&gt;bin/&lt;/a&gt;
+&lt;li&gt;&lt;a href=&quot;boot/&quot;&gt;boot/&lt;/a&gt;
+&lt;li&gt;&lt;a href=&quot;dev/&quot;&gt;dev/&lt;/a&gt;
+&lt;li&gt;&lt;a href=&quot;etc/&quot;&gt;etc/&lt;/a&gt;
+&lt;li&gt;&lt;a href=&quot;home/&quot;&gt;home/&lt;/a&gt;
+&lt;li&gt;&lt;a href=&quot;lib/&quot;&gt;lib/&lt;/a&gt;
+&lt;li&gt;&lt;a href=&quot;lib64/&quot;&gt;lib64/&lt;/a&gt;
+&lt;li&gt;&lt;a href=&quot;media/&quot;&gt;media/&lt;/a&gt;
+&lt;li&gt;&lt;a href=&quot;mnt/&quot;&gt;mnt/&lt;/a&gt;
+&lt;li&gt;&lt;a href=&quot;opt/&quot;&gt;opt/&lt;/a&gt;
+&lt;li&gt;&lt;a href=&quot;proc/&quot;&gt;proc/&lt;/a&gt;
+&lt;li&gt;&lt;a href=&quot;root/&quot;&gt;root/&lt;/a&gt;
+&lt;li&gt;&lt;a href=&quot;run/&quot;&gt;run/&lt;/a&gt;
+&lt;li&gt;&lt;a href=&quot;sbin/&quot;&gt;sbin/&lt;/a&gt;
+&lt;li&gt;&lt;a href=&quot;srv/&quot;&gt;srv/&lt;/a&gt;
+&lt;li&gt;&lt;a href=&quot;sys/&quot;&gt;sys/&lt;/a&gt;
+&lt;li&gt;&lt;a href=&quot;tmp/&quot;&gt;tmp/&lt;/a&gt;
+&lt;li&gt;&lt;a href=&quot;usr/&quot;&gt;usr/&lt;/a&gt;
+&lt;li&gt;&lt;a href=&quot;var/&quot;&gt;var/&lt;/a&gt;
+&lt;/ul&gt;
+&lt;hr&gt;
+&lt;/body&gt;
+&lt;/html&gt;
+</code></pre><blockquote>
+<p><code>docker run -it -d ubuntu-nw -p 80:8000 python -m SimpleHTTPServer 8000</code> 能帮我们完成这次访问，可以观察 Docker Daemon 都为我们做了什么。</p>
+</blockquote>
+
+			</article>
+		</div>
+
+		<footer>
+	&copy; 2020 Wei Fu
+</footer>
+
+<script>
+	function doPrettify(){
+		pres=document.getElementsByTagName('pre');
+		for (i=0; i < pres.length; i++) {
+			pres[i].className+=" prettyprint";
+		}
+		prettyPrint();
+	}
+</script>
+
+	</body>
+</html>

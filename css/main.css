@@ -19,11 +19,11 @@ h6 {
 }
 
 h1 {
-    font-size: 45px;
+    font-size: 40px;
 }
 
 h2 {
-    font-size: 35px;
+    font-size: 33px;
 }
 
 h3 {
@@ -43,7 +43,7 @@ h6 {
 }
 
 body {
-	font-family: Helvetica Neue, Arial, sans-serif;
+    font-family: Helvetica Neue, Arial, sans-serif;
 }
 
 /* about container class which used for home and single page */
@@ -53,35 +53,43 @@ body {
     max-width: 750px;
     margin: 0 auto;
     text-align: left;
-	line-height: 1.8;
+    line-height: 1.8;
     padding: 80px 30px 80px 30px;
-	scroll-margin-top: 50px;
+    scroll-margin-top: 50px;
 }
 
 /* about time format */
 .time {
-	color: #c0c0c0;
+    color: #c0c0c0;
     display: block;
 }
 
-/* about article time format in home page */
-.home.time {
+/* about article format in home page */
+article.home {
+    margin-bottom: 35px;
+}
+
+article.home .title {
+    margin-bottom: 0px;
+}
+
+article.home .time {
     margin-top: 10px;
+    margin-bottom: 10px;
 }
 
 /* about article time format in single page */
-.single.time {
-    margin-top: 10px;
-	margin-bottom: 30px;
-}
-
 article.single {
-	margin-top: 60px;
+    margin-top: 60px;
 }
 
-/* about article title format in single page */
 article.single .title {
     color: #00aeff;
+}
+
+article.single .time {
+    margin-top: 10px;
+    margin-bottom: 30px;
 }
 
 /* about header part */
@@ -150,11 +158,11 @@ a:focus {
 
 /* about footer part */
 footer {
-	position: relative;
-	color: #c0c0c0;
+    position: relative;
+    color: #c0c0c0;
     text-align: center;
-	font-size: 10px;
-	padding-bottom: 80px;
+    font-size: 12px;
+    padding-bottom: 80px;
 }
 
 /* for single page */
@@ -168,20 +176,20 @@ footer {
 .single code {
     padding: 2px 4px;
     color: #1e90ff;
-	background-color: #f7f7f9;
-	border: 1px solid #dddddd;
+    background-color: #f7f7f9;
+    border: 1px solid #dddddd;
 }
 
 /* code markdown code block */
 .single pre {
-	display: block;
-	padding-top: 10px;
+    display: block;
+    padding-top: 10px;
     font-size: 15px;
     color: #333333;
     background-color: #f7f7f9;
     border: 1px solid #dddddd;
     line-height: 150%;
-	box-shadow: 5px 5px 5px #eee;
+    box-shadow: 5px 5px 5px #eee;
 }
 
 .single pre > code {
@@ -192,10 +200,11 @@ footer {
 }
 
 .single pre.prettyprint {
-	/* override code-prettyprint border style */
+    /* override code-prettyprint border style */
+    overflow: auto;
     border: 1px solid #dddddd;
     border-left: 10px solid #c0c0c0;
-	padding-left: 10px;
+    padding-left: 10px;
 }
 
 /* about markdown blockquote */
@@ -282,6 +291,6 @@ footer {
 .single h4,
 .single h5,
 .single h6 {
-	margin-top: 25px;
-	margin-bottom: 25px;
+    margin-top: 25px;
+    margin-bottom: 25px;
 }
