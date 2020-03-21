@@ -1,44 +1,47 @@
 <!DOCTYPE html>
 <html>
-	<head>
-	<meta charset="utf-8" />
-	<meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
 
-	<title>Wei Fu </title>
+    <title>Wei Fu </title>
 
-	<link rel="stylesheet" href="/css/fontawesome/all.css" />
-	<link rel="stylesheet" href="/css/main.css" /> 
-	<link rel="stylesheet" href="/css/normalize.css">
-	<link rel="stylesheet" href="/css/prettify.css">
+    <link rel="stylesheet" href="/css/fontawesome/all.css" />
+    <link rel="stylesheet" href="/css/main.css" /> 
+    <link rel="stylesheet" href="/css/normalize.css">
+    <link rel="stylesheet" href="/css/prettify.css">
     <script type="text/javascript" src="/js/prettify.js"></script>
 </head>
 
 
-	<body onload="doPrettify()">
-		<header>
-	<nav>
-		<ul class="home">
-			<li>
-				<a href="https://fuweid.com">Wei Fu</a>
-			</li>
-		</ul>
-		<ul class="social">
-			<li>
-				<a class="fab fa-github" href="https://github.com/fuweid" target="_blank"></a>
-			</li>
-			<li>
-				<a class="fab fa-twitter" href="https://twitter.com/fuweid89" target="_blank"></a>
-			</li>
-		</ul>
-	</nav>
+    <body onload="doPrettify()">
+        <header>
+    <nav>
+        <ul class="home">
+            <li>
+                <a href="https://fuweid.com/">Wei Fu</a>
+            </li>
+        </ul>
+        <ul class="social">
+            <li>
+                <a class="fab fa-github" href="https://github.com/fuweid" target="_blank"></a>
+            </li>
+            <li>
+                <a class="fab fa-twitter" href="https://twitter.com/fuweid89" target="_blank"></a>
+            </li>
+            <li>
+                <a class="fas fa-rss" href="https://fuweid.com//index.xml" target="_blank"></a>
+            </li>
+        </ul>
+    </nav>
 </header>
 
 
-		<div class="container">
-			<article class="single">
-				<h2 class="title"> Goroutine Scheduler Overview </h2>
-				<h5 class="time"> February 6, 2018 </h5>
-				<p>Goroutine 是 Golang 世界里的 <code>Lightweight Thread</code> 。</p>
+        <div class="container">
+            <article class="single">
+                <h2 class="title"> Goroutine Scheduler Overview </h2>
+                <h5 class="time"> February 6, 2018 </h5>
+                <p>Goroutine 是 Golang 世界里的 <code>Lightweight Thread</code> 。</p>
 <p>Golang 在语言层面支持多线程，代码可以通过 <code>go</code> 关键字来启动 Goroutine ，调用者不需要关心调用栈的大小，函数上下文等等信息就可以完成并发或者并行操作，加快了我们的开发速度。
 分析 Goroutine 调度有利于了解和分析 go binary 的工作状况，所以接下来的内容将分析 <code>runtime</code> 中关于 Goroutine 调度的逻辑。</p>
 <blockquote>
@@ -769,22 +772,22 @@ func checkmcount() {
 <li><a href="https://software.intel.com/en-us/blogs/2014/05/10/debugging-performance-issues-in-go-programs">Debugging performance issues in Go programs</a></li>
 </ul>
 
-			</article>
-		</div>
+            </article>
+        </div>
 
-		<footer>
-	&copy; 2020 Wei Fu
+        <footer>
+    &copy; 2020 Wei Fu
 </footer>
 
 <script>
-	function doPrettify(){
-		pres=document.getElementsByTagName('pre');
-		for (i=0; i < pres.length; i++) {
-			pres[i].className+=" prettyprint";
-		}
-		prettyPrint();
-	}
+    function doPrettify(){
+        pres=document.getElementsByTagName('pre');
+        for (i=0; i < pres.length; i++) {
+            pres[i].className+=" prettyprint";
+        }
+        prettyPrint();
+    }
 </script>
 
-	</body>
+    </body>
 </html>

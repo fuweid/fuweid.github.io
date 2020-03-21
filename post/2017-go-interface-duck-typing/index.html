@@ -1,44 +1,47 @@
 <!DOCTYPE html>
 <html>
-	<head>
-	<meta charset="utf-8" />
-	<meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
 
-	<title>Wei Fu </title>
+    <title>Wei Fu </title>
 
-	<link rel="stylesheet" href="/css/fontawesome/all.css" />
-	<link rel="stylesheet" href="/css/main.css" /> 
-	<link rel="stylesheet" href="/css/normalize.css">
-	<link rel="stylesheet" href="/css/prettify.css">
+    <link rel="stylesheet" href="/css/fontawesome/all.css" />
+    <link rel="stylesheet" href="/css/main.css" /> 
+    <link rel="stylesheet" href="/css/normalize.css">
+    <link rel="stylesheet" href="/css/prettify.css">
     <script type="text/javascript" src="/js/prettify.js"></script>
 </head>
 
 
-	<body onload="doPrettify()">
-		<header>
-	<nav>
-		<ul class="home">
-			<li>
-				<a href="https://fuweid.com">Wei Fu</a>
-			</li>
-		</ul>
-		<ul class="social">
-			<li>
-				<a class="fab fa-github" href="https://github.com/fuweid" target="_blank"></a>
-			</li>
-			<li>
-				<a class="fab fa-twitter" href="https://twitter.com/fuweid89" target="_blank"></a>
-			</li>
-		</ul>
-	</nav>
+    <body onload="doPrettify()">
+        <header>
+    <nav>
+        <ul class="home">
+            <li>
+                <a href="https://fuweid.com/">Wei Fu</a>
+            </li>
+        </ul>
+        <ul class="social">
+            <li>
+                <a class="fab fa-github" href="https://github.com/fuweid" target="_blank"></a>
+            </li>
+            <li>
+                <a class="fab fa-twitter" href="https://twitter.com/fuweid89" target="_blank"></a>
+            </li>
+            <li>
+                <a class="fas fa-rss" href="https://fuweid.com//index.xml" target="_blank"></a>
+            </li>
+        </ul>
+    </nav>
 </header>
 
 
-		<div class="container">
-			<article class="single">
-				<h2 class="title"> Go Interface &amp; Duck Typing </h2>
-				<h5 class="time"> June 5, 2017 </h5>
-				<p>Go 不需要像 Java 那样显式地使用 <strong>implement</strong> 说明某一数据类型实现了 interface，只要某一数据类型实现了 interface 所定义的方法名签，那么就称该数据类型实现了 interface。interface 的语言特性可以容易地做到接口定义和具体实现解耦分离，并将注意力转移到如何使用 interface ，而不是方法的具体实现，我们也称这种程序设计为 Duck Typing。文本将描述 Go 是如何通过 interface 来实现 Duck Typing。</p>
+        <div class="container">
+            <article class="single">
+                <h2 class="title"> Go Interface &amp; Duck Typing </h2>
+                <h5 class="time"> June 5, 2017 </h5>
+                <p>Go 不需要像 Java 那样显式地使用 <strong>implement</strong> 说明某一数据类型实现了 interface，只要某一数据类型实现了 interface 所定义的方法名签，那么就称该数据类型实现了 interface。interface 的语言特性可以容易地做到接口定义和具体实现解耦分离，并将注意力转移到如何使用 interface ，而不是方法的具体实现，我们也称这种程序设计为 Duck Typing。文本将描述 Go 是如何通过 interface 来实现 Duck Typing。</p>
 <blockquote>
 <p>本文提供的源代码都是基于 go1.7rc6 版本。</p>
 </blockquote>
@@ -357,22 +360,22 @@ func convI2E(i iface) (r eface) {...}
 <li><a href="https://research.swtch.com/interfaces">Go Data Structures: Interfaces</a></li>
 </ul>
 
-			</article>
-		</div>
+            </article>
+        </div>
 
-		<footer>
-	&copy; 2020 Wei Fu
+        <footer>
+    &copy; 2020 Wei Fu
 </footer>
 
 <script>
-	function doPrettify(){
-		pres=document.getElementsByTagName('pre');
-		for (i=0; i < pres.length; i++) {
-			pres[i].className+=" prettyprint";
-		}
-		prettyPrint();
-	}
+    function doPrettify(){
+        pres=document.getElementsByTagName('pre');
+        for (i=0; i < pres.length; i++) {
+            pres[i].className+=" prettyprint";
+        }
+        prettyPrint();
+    }
 </script>
 
-	</body>
+    </body>
 </html>

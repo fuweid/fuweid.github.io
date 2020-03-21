@@ -1,44 +1,47 @@
 <!DOCTYPE html>
 <html>
-	<head>
-	<meta charset="utf-8" />
-	<meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
 
-	<title>Wei Fu </title>
+    <title>Wei Fu </title>
 
-	<link rel="stylesheet" href="/css/fontawesome/all.css" />
-	<link rel="stylesheet" href="/css/main.css" /> 
-	<link rel="stylesheet" href="/css/normalize.css">
-	<link rel="stylesheet" href="/css/prettify.css">
+    <link rel="stylesheet" href="/css/fontawesome/all.css" />
+    <link rel="stylesheet" href="/css/main.css" /> 
+    <link rel="stylesheet" href="/css/normalize.css">
+    <link rel="stylesheet" href="/css/prettify.css">
     <script type="text/javascript" src="/js/prettify.js"></script>
 </head>
 
 
-	<body onload="doPrettify()">
-		<header>
-	<nav>
-		<ul class="home">
-			<li>
-				<a href="https://fuweid.com">Wei Fu</a>
-			</li>
-		</ul>
-		<ul class="social">
-			<li>
-				<a class="fab fa-github" href="https://github.com/fuweid" target="_blank"></a>
-			</li>
-			<li>
-				<a class="fab fa-twitter" href="https://twitter.com/fuweid89" target="_blank"></a>
-			</li>
-		</ul>
-	</nav>
+    <body onload="doPrettify()">
+        <header>
+    <nav>
+        <ul class="home">
+            <li>
+                <a href="https://fuweid.com/">Wei Fu</a>
+            </li>
+        </ul>
+        <ul class="social">
+            <li>
+                <a class="fab fa-github" href="https://github.com/fuweid" target="_blank"></a>
+            </li>
+            <li>
+                <a class="fab fa-twitter" href="https://twitter.com/fuweid89" target="_blank"></a>
+            </li>
+            <li>
+                <a class="fas fa-rss" href="https://fuweid.com//index.xml" target="_blank"></a>
+            </li>
+        </ul>
+    </nav>
 </header>
 
 
-		<div class="container">
-			<article class="single">
-				<h2 class="title"> 让你的 shell 脚本变得可控 </h2>
-				<h5 class="time"> March 20, 2017 </h5>
-				<p>刚开始接触 shell 脚本的时候，最痛苦的地方在于出了问题，却不容易定位问题。</p>
+        <div class="container">
+            <article class="single">
+                <h2 class="title"> 让你的 shell 脚本变得可控 </h2>
+                <h5 class="time"> March 20, 2017 </h5>
+                <p>刚开始接触 shell 脚本的时候，最痛苦的地方在于出了问题，却不容易定位问题。</p>
 <p>shell 脚本遇到错误，“大部分” 情况下都会继续执行剩下的命令，最后返回 Zero <a href="https://en.wikipedia.org/wiki/Exit_status">Exit Code</a>  并不代表着结果正确。</p>
 <p>这让人很难发现问题，它不像其他脚本语言，遇到 <code>语法错误</code> 和 <code>typo</code> 等错误时便会立即退出。</p>
 <p>如果想要写出容易维护、容易 debug 的 shell 脚本，我们就需要让 shell 脚本变得可控。</p>
@@ -247,22 +250,22 @@ fi
 <p>关于 <code>set</code> 更多的内容，请前往 <a href="https://www.gnu.org/software/bash/manual/bashref.html#The-Set-Builtin">Link</a> 。</p>
 </blockquote>
 
-			</article>
-		</div>
+            </article>
+        </div>
 
-		<footer>
-	&copy; 2020 Wei Fu
+        <footer>
+    &copy; 2020 Wei Fu
 </footer>
 
 <script>
-	function doPrettify(){
-		pres=document.getElementsByTagName('pre');
-		for (i=0; i < pres.length; i++) {
-			pres[i].className+=" prettyprint";
-		}
-		prettyPrint();
-	}
+    function doPrettify(){
+        pres=document.getElementsByTagName('pre');
+        for (i=0; i < pres.length; i++) {
+            pres[i].className+=" prettyprint";
+        }
+        prettyPrint();
+    }
 </script>
 
-	</body>
+    </body>
 </html>

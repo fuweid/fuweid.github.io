@@ -2,20 +2,20 @@
 <rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom">
   <channel>
     <title>Posts on Wei Fu</title>
-    <link>/post/</link>
+    <link>https://fuweid.com/post/</link>
     <description>Recent content in Posts on Wei Fu</description>
     <generator>Hugo -- gohugo.io</generator>
     <lastBuildDate>Sun, 02 Jun 2019 00:00:00 +0000</lastBuildDate>
     
-	<atom:link href="/post/index.xml" rel="self" type="application/rss+xml" />
+	<atom:link href="https://fuweid.com/post/index.xml" rel="self" type="application/rss+xml" />
     
     
     <item>
       <title>Hola Barcelona</title>
-      <link>/post/2019-hola-barcelona/</link>
+      <link>https://fuweid.com/post/2019-hola-barcelona/</link>
       <pubDate>Sun, 02 Jun 2019 00:00:00 +0000</pubDate>
       
-      <guid>/post/2019-hola-barcelona/</guid>
+      <guid>https://fuweid.com/post/2019-hola-barcelona/</guid>
       <description>前段时间因为 KubeCon 演讲去了趟西班牙-巴塞罗那，忙里偷闲，感受了下西方文化。
 不再是「白本」 5.18 号从杭州出发，途径香港转机到巴塞罗那。飞机上的娱乐设施还算丰富，「海王」、「绿皮书」等新片都可以观看到。十几个小时的飞机总不能一直看电影，还得兼顾倒时差的任务。
 之前没有调整时差的经验，加上平时作息比较规律，十三个小时的飞行过程里相对属于清醒状态。网络要收费，印象中比较贵，基本上干不了别的事情，除了看电影就是睡觉。如果经济允许，可以考虑升舱，坐经济舱飞十几小时简直了。到达 巴塞罗那 是当地时间早上8点，天气还算不错，就是有点过于「凉快」，完全没有夏天的感觉。上了摆渡车，直奔海关。
@@ -43,10 +43,10 @@
     
     <item>
       <title>工作三年</title>
-      <link>/post/2018-3years-career/</link>
+      <link>https://fuweid.com/post/2018-3years-career/</link>
       <pubDate>Fri, 13 Apr 2018 00:00:00 +0000</pubDate>
       
-      <guid>/post/2018-3years-career/</guid>
+      <guid>https://fuweid.com/post/2018-3years-career/</guid>
       <description>不知不觉就过了三年，但是我还能很清楚地记得当时签卖身契的场景，只能说毕业之后时间过的飞起。这三年没写过什么年度总结，今天打算矫情一把，记下流水账。
 Vimer 有一次参加罗老师开发环境的分享会后，我就开始迷上 vim，并结束了 IDE/Sublime 之间的摇摆。从实用角度看，IDE 有着开箱即用的特点，这的确让人无法抗拒。但在平时的工作里，不同语言之间切换是常有的事，而且经常远程调试、常年沉浸在 Terminal 的我，vim 作为编辑器是一个不错的选择。加上韩国小哥 junegunn 开源神器 fzf ，解决了 vim 全文检索巨卡的痛点，这让我毫不犹豫地坚持使用 vim。没试过 fzf 的朋友不妨试试！
 我在习惯 HJKL 的同时，也在尝试回馈社区。还记得刚用 fzf.vim 的时候，当时的全文检索没有预览功能，相比于 Sublime，几乎没法用。所以在参加完公司第二个 Hackathon 之后的那个周末提了人生的第一个 PR。在这期间和韩国小哥 junegunn 来来回回讨论了快一个月，虽然最后失败了，但是我很享受这期间的沟通过程，毕竟能把自己的想法表达清楚是一件难得的事，因为非实时的沟通一旦出现理解偏差，时间成本将会急速上升。
@@ -61,10 +61,10 @@ Gopher 语言切换算是这三年里最大的变化吧。为了看 Docker 的�
     
     <item>
       <title>Goroutine Scheduler Overview</title>
-      <link>/post/2018-goroutine-scheduler-overview/</link>
+      <link>https://fuweid.com/post/2018-goroutine-scheduler-overview/</link>
       <pubDate>Tue, 06 Feb 2018 00:00:00 +0800</pubDate>
       
-      <guid>/post/2018-goroutine-scheduler-overview/</guid>
+      <guid>https://fuweid.com/post/2018-goroutine-scheduler-overview/</guid>
       <description>Goroutine 是 Golang 世界里的 Lightweight Thread 。
 Golang 在语言层面支持多线程，代码可以通过 go 关键字来启动 Goroutine ，调用者不需要关心调用栈的大小，函数上下文等等信息就可以完成并发或者并行操作，加快了我们的开发速度。 分析 Goroutine 调度有利于了解和分析 go binary 的工作状况，所以接下来的内容将分析 runtime 中关于 Goroutine 调度的逻辑。
  以下内容涉及到的代码是基于 go1.9rc2 版本。
@@ -74,10 +74,10 @@ Golang 在语言层面支持多线程，代码可以通过 go 关键字来启动
     
     <item>
       <title>Protobuf 3.0 编码</title>
-      <link>/post/2017-protobuf-3-encoding/</link>
+      <link>https://fuweid.com/post/2017-protobuf-3-encoding/</link>
       <pubDate>Wed, 15 Nov 2017 00:00:00 +0000</pubDate>
       
-      <guid>/post/2017-protobuf-3-encoding/</guid>
+      <guid>https://fuweid.com/post/2017-protobuf-3-encoding/</guid>
       <description>Protobuf 是 G 厂开源的序列化数据的方法，可用来通信或者存储数据。它采用 IDL 描述数据接口，使得不同语言编写的程序可以根据同一接口通信。不同编程语言也可以根据 IDL 的描述来生成对应数据结构，该数据结构用来编解码。为此，G 厂为主流开发语言都提供代码生成器（即 protoc ）。
 为了更好地了解一些细节，本文将主要描述 Protobuf 3.0 的编码规则。 Protobuf 里面主要采用 Varint 和 Zig-Zag 的方式来对整型数字进行编码。在理解 Protobuf 之前，需要先了解这两种编码方式。
  Protobuf 采用是 Little Endian 的方式编码。
@@ -90,10 +90,10 @@ Varints 将源数据按照 7 bit 分组，每 7 bit 加 MSB (Most Significant Bi
     
     <item>
       <title>Go Interface &amp; Duck Typing</title>
-      <link>/post/2017-go-interface-duck-typing/</link>
+      <link>https://fuweid.com/post/2017-go-interface-duck-typing/</link>
       <pubDate>Mon, 05 Jun 2017 00:00:00 +0000</pubDate>
       
-      <guid>/post/2017-go-interface-duck-typing/</guid>
+      <guid>https://fuweid.com/post/2017-go-interface-duck-typing/</guid>
       <description>Go 不需要像 Java 那样显式地使用 implement 说明某一数据类型实现了 interface，只要某一数据类型实现了 interface 所定义的方法名签，那么就称该数据类型实现了 interface。interface 的语言特性可以容易地做到接口定义和具体实现解耦分离，并将注意力转移到如何使用 interface ，而不是方法的具体实现，我们也称这种程序设计为 Duck Typing。文本将描述 Go 是如何通过 interface 来实现 Duck Typing。
  本文提供的源代码都是基于 go1.7rc6 版本。
  1. Duck Typing 了解实现原理之前，我们可以简单过一下 Go 的 Duck Typing 示例。
@@ -102,10 +102,10 @@ package main type Ducker interface { Quack() } type Duck struct {} func (_ Duck)
     
     <item>
       <title>让你的 shell 脚本变得可控</title>
-      <link>/post/2017-control-your-shell-script/</link>
+      <link>https://fuweid.com/post/2017-control-your-shell-script/</link>
       <pubDate>Mon, 20 Mar 2017 00:00:00 +0800</pubDate>
       
-      <guid>/post/2017-control-your-shell-script/</guid>
+      <guid>https://fuweid.com/post/2017-control-your-shell-script/</guid>
       <description>刚开始接触 shell 脚本的时候，最痛苦的地方在于出了问题，却不容易定位问题。
 shell 脚本遇到错误，“大部分” 情况下都会继续执行剩下的命令，最后返回 Zero Exit Code 并不代表着结果正确。
 这让人很难发现问题，它不像其他脚本语言，遇到 语法错误 和 typo 等错误时便会立即退出。
@@ -117,10 +117,10 @@ set -e 默认情况下，shell 脚本遇到错误并不会立即退出，它还�
     
     <item>
       <title>shebang - #!</title>
-      <link>/post/2017-shebang-compatibility-version/</link>
+      <link>https://fuweid.com/post/2017-shebang-compatibility-version/</link>
       <pubDate>Sun, 19 Mar 2017 00:00:00 +0800</pubDate>
       
-      <guid>/post/2017-shebang-compatibility-version/</guid>
+      <guid>https://fuweid.com/post/2017-shebang-compatibility-version/</guid>
       <description>写脚本的时候通常会在脚本的开头加上 shebang, 系统会将这段内容作为解释器指令，比如 bash shell 脚本。
 $&amp;gt; cat example #!/usr/bin/bash echo &amp;quot;HaHa&amp;quot; $&amp;gt; chmod +x ./example $&amp;gt; ./example HaHa 只要为脚本添加了可执行的属性，那么内核在执行脚本的时候，会调用 shebang 描述的解释器来执行脚本。 ./exmaple 其实等价于 /usr/bin/bash ./example。shebang 描述的解释器需要写其绝对路径或者相对路径，因为内核并不会在用户设置的 PATH 里找解释器。关于 shebang，讨论最多的应该是 兼容性 和 版本控制 问题。
 兼容性 Linux 和 Unix 在存放解释器的具体路径不太一致，比如 Linux 会放到 /usr/bin/ 中，而 openBSD 会放到 /usr/local/bin/ 中。不同包管理器在安装解释器的时候，存放的位置也不尽相同。 当你在 Mac 上写了 shell 脚本，测试并提交到代码库。 结果等到部署的那一天，执行脚本的时候发现找不到解释器了。 为了解决这个问题，可以通过 env 来解决，因为它在 Linux 和 Unix 存放的位置相同。
@@ -129,10 +129,10 @@ $&amp;gt; cat exmaple #!/usr/bin/env bash echo &amp;#34;HaHa&amp;#34; env 会在
     
     <item>
       <title>Netfilter 初探</title>
-      <link>/post/2017-netfilter-beginning/</link>
+      <link>https://fuweid.com/post/2017-netfilter-beginning/</link>
       <pubDate>Fri, 17 Mar 2017 00:00:00 +0800</pubDate>
       
-      <guid>/post/2017-netfilter-beginning/</guid>
+      <guid>https://fuweid.com/post/2017-netfilter-beginning/</guid>
       <description>Linux 内核在 2.4.x 版本中正式引入 Netfilter 模块，该模块负责网络数据包过滤和 Network Address Translation。 Netfilter 代表着一系列的 Hook ，被内核嵌入到 TCP/IP 协议栈中，数据包在穿梭协议栈时，Hook 会检查数据包，从而达到访问控制的作用。
 规则链 Netfilter 模块默认定义了五种类型的 Hook：
  PREROUTING INPUT FORWARD OUTPUT POSTROUTING   在 Netfilter 里，Hook 也称为 Chain，规则链

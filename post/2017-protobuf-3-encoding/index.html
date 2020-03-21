@@ -1,44 +1,47 @@
 <!DOCTYPE html>
 <html>
-	<head>
-	<meta charset="utf-8" />
-	<meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
 
-	<title>Wei Fu </title>
+    <title>Wei Fu </title>
 
-	<link rel="stylesheet" href="/css/fontawesome/all.css" />
-	<link rel="stylesheet" href="/css/main.css" /> 
-	<link rel="stylesheet" href="/css/normalize.css">
-	<link rel="stylesheet" href="/css/prettify.css">
+    <link rel="stylesheet" href="/css/fontawesome/all.css" />
+    <link rel="stylesheet" href="/css/main.css" /> 
+    <link rel="stylesheet" href="/css/normalize.css">
+    <link rel="stylesheet" href="/css/prettify.css">
     <script type="text/javascript" src="/js/prettify.js"></script>
 </head>
 
 
-	<body onload="doPrettify()">
-		<header>
-	<nav>
-		<ul class="home">
-			<li>
-				<a href="https://fuweid.com">Wei Fu</a>
-			</li>
-		</ul>
-		<ul class="social">
-			<li>
-				<a class="fab fa-github" href="https://github.com/fuweid" target="_blank"></a>
-			</li>
-			<li>
-				<a class="fab fa-twitter" href="https://twitter.com/fuweid89" target="_blank"></a>
-			</li>
-		</ul>
-	</nav>
+    <body onload="doPrettify()">
+        <header>
+    <nav>
+        <ul class="home">
+            <li>
+                <a href="https://fuweid.com/">Wei Fu</a>
+            </li>
+        </ul>
+        <ul class="social">
+            <li>
+                <a class="fab fa-github" href="https://github.com/fuweid" target="_blank"></a>
+            </li>
+            <li>
+                <a class="fab fa-twitter" href="https://twitter.com/fuweid89" target="_blank"></a>
+            </li>
+            <li>
+                <a class="fas fa-rss" href="https://fuweid.com//index.xml" target="_blank"></a>
+            </li>
+        </ul>
+    </nav>
 </header>
 
 
-		<div class="container">
-			<article class="single">
-				<h2 class="title"> Protobuf 3.0 编码 </h2>
-				<h5 class="time"> November 15, 2017 </h5>
-				<p>Protobuf 是 G 厂开源的序列化数据的方法，可用来通信或者存储数据。它采用 IDL 描述数据接口，使得不同语言编写的程序可以根据同一接口通信。不同编程语言也可以根据 IDL 的描述来生成对应数据结构，该数据结构用来编解码。为此，G 厂为主流开发语言都提供代码生成器（即 protoc ）。</p>
+        <div class="container">
+            <article class="single">
+                <h2 class="title"> Protobuf 3.0 编码 </h2>
+                <h5 class="time"> November 15, 2017 </h5>
+                <p>Protobuf 是 G 厂开源的序列化数据的方法，可用来通信或者存储数据。它采用 IDL 描述数据接口，使得不同语言编写的程序可以根据同一接口通信。不同编程语言也可以根据 IDL 的描述来生成对应数据结构，该数据结构用来编解码。为此，G 厂为主流开发语言都提供代码生成器（即 protoc ）。</p>
 <p>为了更好地了解一些细节，本文将主要描述 Protobuf 3.0 的编码规则。
 Protobuf 里面主要采用 Varint 和 Zig-Zag 的方式来对整型数字进行编码。在理解 Protobuf 之前，需要先了解这两种编码方式。</p>
 <blockquote>
@@ -278,22 +281,22 @@ message SimplePacked {
 <li><a href="https://developers.google.com/protocol-buffers/docs/encoding">Protocol Buffers Encoding</a></li>
 </ul>
 
-			</article>
-		</div>
+            </article>
+        </div>
 
-		<footer>
-	&copy; 2020 Wei Fu
+        <footer>
+    &copy; 2020 Wei Fu
 </footer>
 
 <script>
-	function doPrettify(){
-		pres=document.getElementsByTagName('pre');
-		for (i=0; i < pres.length; i++) {
-			pres[i].className+=" prettyprint";
-		}
-		prettyPrint();
-	}
+    function doPrettify(){
+        pres=document.getElementsByTagName('pre');
+        for (i=0; i < pres.length; i++) {
+            pres[i].className+=" prettyprint";
+        }
+        prettyPrint();
+    }
 </script>
 
-	</body>
+    </body>
 </html>
