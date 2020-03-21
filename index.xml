@@ -3,9 +3,44 @@
         <title>Wei Fu</title>
         <link>https://fuweid.com/</link>
         <copyright>2020 Wei Fu</copyright>
-        <lastBuildDate>Sun, 02 Jun 2019 00:00:00 +0000</lastBuildDate>
+        <lastBuildDate>Sat, 21 Mar 2020 00:00:00 +0800</lastBuildDate>
         <atom:link href="/" rel="self" type="application/rss+xml" />
 
+        
+        <item>
+          <title>在线看 O&#39;Reilly 动物新书指南</title>
+          <link>/post/2020-digital-book-from-safari/</link>
+          <pubDate>Sat, 21 Mar 2020 00:00:00 +0800</pubDate>
+          <guid>https://fuweid.com/post/2020-digital-book-from-safari/</guid>
+          <description>&lt;p&gt;想当初，为了看 &lt;a href=&#34;http://pages.cs.wisc.edu/~remzi/OSTEP/#book-chapters&#34;&gt;Operating Systems: Three Easy Pieces&lt;/a&gt; 和 &lt;a href=&#34;https://book.douban.com/subject/30218046/&#34;&gt;A Philosophy of Software Design&lt;/a&gt; 原版技术书，还特别麻烦了朋友从国外人肉带回来，成本极高。
+但如果等国内出版社引进，就会出现时间跨度太大没法尝鲜；加上翻译水平参差不齐，等待中文版的路子基本上行不通。
+为了解决这个尴尬问题，最近找到了一个比较实惠看国外原版书籍的方式：&lt;strong&gt;ACM Professional Membership&lt;/strong&gt;。&lt;/p&gt;
+&lt;p&gt;ACM Professional Membership &lt;a href=&#34;https://www.acm.org/membership/membership-benefits&#34;&gt;会员权益&lt;/a&gt; 有很多，其中有一项是：&lt;/p&gt;
+&lt;blockquote&gt;
+&lt;p&gt;Learning Center with resources for lifelong learning, including online courses
+targeted toward essential IT skills and popular certifications;
+online books &amp;amp; videos from Skillsoft®, &lt;strong&gt;online books from O&amp;rsquo;Reilly®&lt;/strong&gt;,
+Morgan Kaufmann and Syngress; videos and webinars on hot topics, presented by today&amp;rsquo;s innovators&lt;/p&gt;
+&lt;/blockquote&gt;
+&lt;p&gt;会员可以享受学习平台，其中包含了 O&amp;rsquo;Reilly online books。
+平时在网上买技术书籍，基本上都能看到 O&amp;rsquo;Reilly 动物封面书籍，比如 &lt;a href=&#34;https://book.douban.com/subject/26675256/&#34;&gt;Site Reliability Engineering&lt;/a&gt;。
+这个出版社覆盖的书籍比较多，基本上能满足我大部分阅读需求。
+本着怀疑的态度看这个权益，没想到尝试之后，真香。&lt;/p&gt;
+&lt;p&gt;ACM Professional Membership 会员直接注册的话，需要 99 美金一年。但是 ACM 还提供了 &lt;a href=&#34;https://services.acm.org/public/qj/proflevel/countryListing.cfm?promo=PWEBTOP&amp;amp;form_type=Professional&#34;&gt;Special rates for Professionals in economically developing countries&lt;/a&gt; 优惠。在页面上你会看见 China 字样，点击之后会发现一年基本包才 170 RMB，真的优惠不少。&lt;/p&gt;
+&lt;blockquote&gt;
+&lt;p&gt;&lt;a href=&#34;https://www.acm.org/&#34;&gt;ACM&lt;/a&gt; 主页有 &lt;a href=&#34;https://www.acm.org/membership/join-acm&#34;&gt;Join&lt;/a&gt; 链接，点击就可以看到 &lt;strong&gt;Special rates for Professionals in economically developing countries&lt;/strong&gt;。&lt;/p&gt;
+&lt;/blockquote&gt;
+&lt;p&gt;&lt;img src=&#34;https://fuweid.com/img/2020-digital-book-from-safari/special-rate-for-China.png&#34; alt=&#34;special-rate-for-China&#34;&gt;&lt;/p&gt;
+&lt;p&gt;只要有本科学士学位或者同等教育，或者两年 IT 领域的工作经历就可以申请会员了。
+我在注册过程中，没有遇到需要提供相关证明的要求，基本上填完信息、付款完毕就申请成功了。
+但是付款页面做的实在太简陋了，用信用卡看着就不安全，再加上邮寄付款方式不方便，所以最后选择了 Paypal 支付。
+注册完毕之后，申请 ACM Web Account 就大功告成了，如何登陆 O&amp;rsquo;Reilly 可以查看&lt;a href=&#34;https://learning.acm.org/faq/oreilly-faqs&#34;&gt;学习平台使用指南&lt;/a&gt;。&lt;/p&gt;
+&lt;p&gt;在家使用了一个月，在电脑和手机端都可以登陆，除了页面搜索响应速度不快以外，基本上体验还是很不错。
+最重要的是新书基本都可以看到，就像最新上架的 &lt;a href=&#34;https://book.douban.com/subject/34875994/&#34;&gt;Software Engineering at Google&lt;/a&gt;。&lt;/p&gt;
+&lt;p&gt;&lt;img src=&#34;https://fuweid.com/img/2020-digital-book-from-safari/preview-for-se-at-google.png&#34; alt=&#34;preview-for-se-at-google&#34;&gt;&lt;/p&gt;
+&lt;p&gt;言而总之，一言以蔽之，这付费订阅体验真的很好！&lt;/p&gt;
+</description>
+        </item>
         
         <item>
           <title>Hola Barcelona</title>

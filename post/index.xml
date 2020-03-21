@@ -5,10 +5,22 @@
     <link>https://fuweid.com/post/</link>
     <description>Recent content in Posts on Wei Fu</description>
     <generator>Hugo -- gohugo.io</generator>
-    <lastBuildDate>Sun, 02 Jun 2019 00:00:00 +0000</lastBuildDate>
+    <lastBuildDate>Sat, 21 Mar 2020 00:00:00 +0800</lastBuildDate>
     
 	<atom:link href="https://fuweid.com/post/index.xml" rel="self" type="application/rss+xml" />
     
+    
+    <item>
+      <title>在线看 O&#39;Reilly 动物新书指南</title>
+      <link>https://fuweid.com/post/2020-digital-book-from-safari/</link>
+      <pubDate>Sat, 21 Mar 2020 00:00:00 +0800</pubDate>
+      
+      <guid>https://fuweid.com/post/2020-digital-book-from-safari/</guid>
+      <description>想当初，为了看 Operating Systems: Three Easy Pieces 和 A Philosophy of Software Design 原版技术书，还特别麻烦了朋友从国外人肉带回来，成本极高。 但如果等国内出版社引进，就会出现时间跨度太大没法尝鲜；加上翻译水平参差不齐，等待中文版的路子基本上行不通。 为了解决这个尴尬问题，最近找到了一个比较实惠看国外原版书籍的方式：ACM Professional Membership。
+ACM Professional Membership 会员权益 有很多，其中有一项是：
+ Learning Center with resources for lifelong learning, including online courses targeted toward essential IT skills and popular certifications; online books &amp;amp; videos from Skillsoft®, online books from O&amp;rsquo;Reilly®, Morgan Kaufmann and Syngress; videos and webinars on hot topics, presented by today&amp;rsquo;s innovators
+ 会员可以享受学习平台，其中包含了 O&amp;rsquo;Reilly online books。 平时在网上买技术书籍，基本上都能看到 O&amp;rsquo;Reilly 动物封面书籍，比如 Site Reliability Engineering。 这个出版社覆盖的书籍比较多，基本上能满足我大部分阅读需求。 本着怀疑的态度看这个权益，没想到尝试之后，真香。</description>
+    </item>
     
     <item>
       <title>Hola Barcelona</title>
