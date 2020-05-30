@@ -5,10 +5,21 @@
     <link>https://fuweid.com/post/</link>
     <description>Recent content in Posts on Wei Fu</description>
     <generator>Hugo -- gohugo.io</generator>
-    <lastBuildDate>Sat, 21 Mar 2020 00:00:00 +0800</lastBuildDate>
+    <lastBuildDate>Sat, 30 May 2020 00:00:00 +0800</lastBuildDate>
     
 	<atom:link href="https://fuweid.com/post/index.xml" rel="self" type="application/rss+xml" />
     
+    
+    <item>
+      <title>可以同时对一个 go string 进行读写操作吗？</title>
+      <link>https://fuweid.com/post/2020-go-string-data-race/</link>
+      <pubDate>Sat, 30 May 2020 00:00:00 +0800</pubDate>
+      
+      <guid>https://fuweid.com/post/2020-go-string-data-race/</guid>
+      <description>写过 Go 代码的同学都知道，在程序内启动多个 goroutine 处理任务是很常见的事情， 启动一个 goroutine 要比启动一个线程简单的多。当多个 goroutine 同时处理同一份数据时， 我们应该在代码中加入同步机制，保证多个 goroutine 按照一定顺序来访问数据， 不然就会出现 data race。 最常见的例子如下，同时写操作 map 数据会导致程序 panic，即使操作的是不同 key：
+// example 1  package main func main() { for { c := make(chan bool) m := make(map[string]string) go func() { m[&amp;#34;1&amp;#34;] = &amp;#34;a&amp;#34; // First conflicting access.  c &amp;lt;- true }() m[&amp;#34;2&amp;#34;] = &amp;#34;b&amp;#34; // Second conflicting access.  &amp;lt;-c } } 那么下面的代码也会 panic 吗？
+// example 2 // 1 package main 2 3 import &amp;#34;sync&amp;#34; 4 5 func main() { 6 var wg sync.</description>
+    </item>
     
     <item>
       <title>在线看 O&#39;Reilly 动物新书指南</title>
