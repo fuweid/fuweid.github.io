@@ -5,10 +5,23 @@
     <link>https://fuweid.com/post/</link>
     <description>Recent content in Posts on Wei Fu</description>
     <generator>Hugo -- gohugo.io</generator>
-    <lastBuildDate>Sat, 30 May 2020 00:00:00 +0800</lastBuildDate>
+    <lastBuildDate>Sun, 21 Jun 2020 18:00:53 +0800</lastBuildDate>
     
 	<atom:link href="https://fuweid.com/post/index.xml" rel="self" type="application/rss+xml" />
     
+    
+    <item>
+      <title>go sync.Mutex 源码阅读</title>
+      <link>https://fuweid.com/post/2020-go-sync-mutex-insight/</link>
+      <pubDate>Sun, 21 Jun 2020 18:00:53 +0800</pubDate>
+      
+      <guid>https://fuweid.com/post/2020-go-sync-mutex-insight/</guid>
+      <description>Linux Kernel 提供 Semaphore/Mutex 来实现线程间的同步机制，可保证在同一个时间段 只有少量的线程可以访问同一块资源（也称为进入临界区域）。 线程之间要通过竞争来获得访问权限，一旦竞争失败，线程会进入到阻塞状态； 而阻塞的线程只能等待离开临界区域被内核唤醒。
+go runtime 提供的 sync.Mutex 并不是采用内核级别的同步机制。 作为执行单元的线程一旦阻塞，意味该线程将不再受到 go runtime 控制， go runtime 需要创建新的线程来执行其他 runnable goroutine ， 线程的数目会和竞争资源的请求成正比，容易造成资源浪费。 而 go 优势是 goroutine 轻量级调度，因此 sync.Mutex 选择在用户态来实现同步机制。
+和线程阻塞类似，在无法进入临界区的情况下，goroutine 会主动释放当前的 执行单元 - 线程，进入到阻塞状态；在 sync.Mutex 持有者离开临界区之前， 阻塞状态的 goroutine 将不会出现在调度队列里。 这样被释放的线程会去执行其他 runnable goroutine，提升线程的利用率。
+sync.Mutex 结构设计分析 Mutex 也被称之为锁。
+// sync/mutex.go  // A Mutex is a mutual exclusion lock. // The zero value for a Mutex is an unlocked mutex. // // A Mutex must not be copied after first use.</description>
+    </item>
     
     <item>
       <title>可以同时对一个 go string 进行读写操作吗？</title>
