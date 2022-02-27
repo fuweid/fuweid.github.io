@@ -5,10 +5,22 @@
     <link>https://fuweid.com/post/</link>
     <description>Recent content in Posts on Wei Fu</description>
     <generator>Hugo -- gohugo.io</generator>
-    <lastBuildDate>Sun, 21 Jun 2020 18:00:53 +0800</lastBuildDate>
+    <lastBuildDate>Sun, 27 Feb 2022 23:00:53 +0800</lastBuildDate>
     
 	<atom:link href="https://fuweid.com/post/index.xml" rel="self" type="application/rss+xml" />
     
+    
+    <item>
+      <title>eBPF Loader</title>
+      <link>https://fuweid.com/post/2022-ebpf-loader/</link>
+      <pubDate>Sun, 27 Feb 2022 23:00:53 +0800</pubDate>
+      
+      <guid>https://fuweid.com/post/2022-ebpf-loader/</guid>
+      <description>0. What is eBPF? Extended Berkeley Packet Filter (eBPF) 是由 Linux 提供的内核技术，它是以安全沙盒 (Virtual Machine) 的形式运行用户定义的 ByteCode 来观测内核运行状态以及拓展内核的能力，开发者无需定制内核模块就可以高效地完成对现有模块的拓展。eBPF 安全沙盒是嵌入到 Linux 内核运行态的关键路径上，通过事件订阅的形式来触发 eBPF 程序，其运用场景有：
+ cilium 在 L3/L4 提供高效的网络转发能力 bcc 提供常用的观测组件来定位业务遇到的性能问题 Google 内核调度拓展 ghOSt  我过去主要使用 eBPF 在观测和排查一些节点的性能问题。由于底层基础设施能力以及业务运行模型存在差异，这将导致节点组件出现不在预期内的行为，而在本地又难以复现，大大增加了沟通和排查成本。而 eBPF 可以捕捉到程序在内核里的状态，甚至是短命的程序调用 (比如容器领域的 runC 命令) 都可以捕捉, 它可以最大程度地呈现程序的运行状态来提升问题的排查效率。
+比如前段时间遇到的 containerD CRI 组件创建容器超时的问题，我通过 bcc stackcount 捕抓到 根因: umount 可写的文件系统时会调用底层文件系统的刷盘动作，它用来保证数据能及时落盘；但这同时也给磁盘带来压力，IOPS 弱的数据盘将会拖慢 umount 调用。对于一个不熟悉内核代码的开发者来说，eBPF 观测类工具暴露出的关键函数路径就和日志的错误信息一样，全局搜索相应的内核代码段，然后顺藤摸瓜，总会找到些蛛丝马迹。
+eBPF 目前发展的比较快，其中一个重要的支线是 Compile-Once Run-Everwhere (CO-RE) ，这有点像 docker 镜像分发的 Build-Once Run-Anywhere, 下面将主要围绕兼容性去介绍如何加载 eBPF 程序。</description>
+    </item>
     
     <item>
       <title>go sync.Mutex 源码阅读</title>

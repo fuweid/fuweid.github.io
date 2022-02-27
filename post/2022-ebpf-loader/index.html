@@ -1,0 +1,404 @@
+<!DOCTYPE html>
+<html>
+    <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+    <title>Wei Fu </title>
+
+    <link rel="stylesheet" href="/css/fontawesome/all.css" />
+    <link rel="stylesheet" href="/css/main.css" /> 
+    <link rel="stylesheet" href="/css/normalize.css">
+    <link rel="stylesheet" href="/css/prettify.css">
+    <script type="text/javascript" src="/js/prettify.js"></script>
+</head>
+
+
+    <body onload="doPrettify()">
+        <header>
+    <nav>
+        <ul class="home">
+            <li>
+                <a href="https://fuweid.com/">Wei Fu</a>
+            </li>
+        </ul>
+        <ul class="social">
+            <li>
+                <a class="fab fa-github" href="https://github.com/fuweid" target="_blank"></a>
+            </li>
+            <li>
+                <a class="fab fa-twitter" href="https://twitter.com/fuweid89" target="_blank"></a>
+            </li>
+            <li>
+                <a class="fas fa-rss" href="https://fuweid.com//index.xml" target="_blank"></a>
+            </li>
+        </ul>
+    </nav>
+</header>
+
+
+        <div class="container">
+            <article class="single">
+                <h2 class="title"> eBPF Loader </h2>
+                <h5 class="time"> February 27, 2022 </h5>
+                <h2 id="0-what-is-ebpf">0. What is eBPF?</h2>
+<p>Extended Berkeley Packet Filter (eBPF) 是由 Linux 提供的内核技术，它是以安全沙盒 (Virtual Machine) 的形式运行用户定义的 ByteCode 来观测内核运行状态以及拓展内核的能力，开发者无需定制内核模块就可以高效地完成对现有模块的拓展。eBPF 安全沙盒是嵌入到 Linux 内核运行态的关键路径上，通过事件订阅的形式来触发 eBPF 程序，其运用场景有：</p>
+<ul>
+<li><a href="https://github.com/cilium/cilium">cilium</a> 在 L3/L4 提供高效的网络转发能力</li>
+<li><a href="https://github.com/iovisor/bcc">bcc</a> 提供常用的观测组件来定位业务遇到的性能问题</li>
+<li>Google 内核调度拓展 <a href="https://github.com/google/ghost-userspace">ghOSt</a></li>
+</ul>
+<p>我过去主要使用 eBPF 在观测和排查一些节点的性能问题。由于底层基础设施能力以及业务运行模型存在差异，这将导致节点组件出现不在预期内的行为，而在本地又难以复现，大大增加了沟通和排查成本。而 eBPF 可以捕捉到程序在内核里的状态，甚至是短命的程序调用 (比如容器领域的 runC 命令) 都可以捕捉, 它可以最大程度地呈现程序的运行状态来提升问题的排查效率。</p>
+<p>比如前段时间遇到的 containerD CRI 组件创建容器超时的问题，我通过 <a href="https://github.com/iovisor/bcc">bcc</a> stackcount 捕抓到 <a href="https://github.com/containerd/containerd/pull/6478">根因</a>: umount 可写的文件系统时会调用底层文件系统的刷盘动作，它用来保证数据能及时落盘；但这同时也给磁盘带来压力，IOPS 弱的数据盘将会拖慢 umount 调用。对于一个不熟悉内核代码的开发者来说，eBPF 观测类工具暴露出的关键函数路径就和日志的错误信息一样，全局搜索相应的内核代码段，然后顺藤摸瓜，总会找到些蛛丝马迹。</p>
+<p>eBPF 目前发展的比较快，其中一个重要的支线是 Compile-Once Run-Everwhere (CO-RE) ，这有点像 <a href="https://github.com/moby/moby">docker</a> 镜像分发的 Build-Once Run-Anywhere, 下面将主要围绕兼容性去介绍如何加载 eBPF 程序。</p>
+<h3 id="1-type-metadata">1. Type Metadata</h3>
+<p>eBPF 允许读取和修改内核运行态的数据，常见数据结构有线程的 <code>task_struct</code> 和网络子系统的 <code>__sk_buff</code>。这些常用的结构体在不同内核版本之间存在差异， 比如某一个字段位于 <code>task_struct</code> 结构体的第 16 字节处，然而升级到某一个内核版本后，这个字段被移到第 24 字节处，那么原先编译好的 eBPF 将无法正常工作。早期的 <a href="https://github.com/iovisor/bcc">bcc</a> 组件在使用过程中都是在目标节点上利用现有的内核相关头文件来编译。但即使如此，bcc 也没法解决字段名被更换的问题，字段名变化容易出现编译不通过。因此早期大部分情况下，开发者还是会选择根据不同内核版本出不同的二进制，这给测试验证带来了极大的成本。</p>
+<p>为了解决类型匹配问题，eBPF 需要额外的类型系统的描述数据。eBPF 程序所使用的数据类型和函数接口都通过常用的调试信息 <a href="https://dwarfstd.org/doc/Debugging%20using%20DWARF-2012.pdf">DWARF</a> 描述, 如下图所示 <a href="https://github.com/libbpf/libbpf-bootstrap/blob/master/examples/c/bootstrap.bpf.c">bootstrap.bpf.c</a> 编译完毕后的 <code>task_struct</code> 部分类型信息， 其中 <code>thread_info</code> 和 <code>state</code> 是 <code>task_struct</code>的字段。</p>
+<div class="highlight"><pre class="chroma"><code class="language-text" data-lang="text">// use llvm-dwarfdump
+...
+
+0x00005f27:   DW_TAG_structure_type
+                DW_AT_name      (&#34;task_struct&#34;)
+                DW_AT_byte_size (0x1ac0)
+                DW_AT_decl_file (&#34;xxx&#34;)
+                DW_AT_decl_line (883)
+
+0x00005f2f:     DW_TAG_member
+                  DW_AT_name    (&#34;thread_info&#34;)
+                  DW_AT_type    (0x00006775 &#34;thread_info&#34;)
+                  DW_AT_decl_file       (&#34;xxx&#34;)
+                  DW_AT_decl_line       (884)
+                  DW_AT_data_member_location    (0x00)
+
+0x00005f3a:     DW_TAG_member
+                  DW_AT_name    (&#34;state&#34;)
+                  DW_AT_type    (0x00006793 &#34;volatile long&#34;)
+                  DW_AT_decl_file       (&#34;xxx&#34;)
+                  DW_AT_decl_line       (885)
+                  DW_AT_data_member_location    (0x10)
+
+...
+</code></pre></div><p>DWARF 对类型描述十分详细，包含类型字段的大小、字段的偏移量等等。当 eBPF 加载时，只需要在当前 Linux 内核的 DWARF 调试信息找到最匹配 eBPF 程序中的类型即可，即使字段的偏移量发生改变也没关系，只需 Relocation 成对应的偏移量即可。但 DWARF 调试信息为纯文本格式，内核的调试信息大概有 100+ MB，让内核启动带上这些信息成本太高了，这里需要可压缩的类型格式。</p>
+<p>内核社区提出了 <a href="https://www.kernel.org/doc/html/v5.13/bpf/btf.html">BPF Type Format (BTF)</a>, 它可以将 100+ MB DWARF 信息压缩到 1.5 MB，eBPF 以及 Linux 内核都方便携带，具体的压缩算法可以阅读 <a href="https://nakryiko.com/posts/btf-dedup/">BTF deduplication and Linux kernel BTF</a>, 在此就仅仅展示 BTF dump 信息。</p>
+<div class="highlight"><pre class="chroma"><code class="language-text" data-lang="text">// use pahole -JV
+...
+
+[624] STRUCT task_struct size=6848
+        thread_info type_id=625 bits_offset=0
+        state type_id=626 bits_offset=128
+        stack type_id=29 bits_offset=192
+        usage type_id=308 bits_offset=256
+        flags type_id=37 bits_offset=288
+        ptrace type_id=37 bits_offset=320
+        on_cpu type_id=10 bits_offset=352
+        wake_entry type_id=628 bits_offset=384
+        cpu type_id=37 bits_offset=512
+...
+
+</code></pre></div><p>当每个字段的偏移量以及类型信息可通过极低的成本携带时，eBPF 加载器可以使用类型匹配策略来将使用体验提升到新的高度。下面将介绍加载器的核心工作 - 重定向。</p>
+<h3 id="2-relocation">2. Relocation</h3>
+<p>eBPF 一般来说是由 clang/llvm 编译 C 文件得到的 ELF 二进制文件， 其中它采用十个通用的寄存器、只读的 Frame Pointer 寄存器以及使用长度为 64 bits 的 <a href="https://www.kernel.org/doc/html/latest/bpf/instruction-set.html">指令集</a>。加载器需要解决重定向后才能进行 BPF Verifier，而重定向内容主要涉及到三部分 Map，CO-RE 以及函数调用。</p>
+<h4 id="21-map">2.1 Map</h4>
+<p>eBPF 程序和程序之间以及同用户态之间的交互都是通过 Map 来实现，而 Map 增删改查是通过文件句柄的形式来操作，而这依赖 <a href="https://man7.org/linux/man-pages/man2/bpf.2.html">BPF_MAP_CREATE</a> bpf 系统调用。</p>
+<div class="highlight"><pre class="chroma"><code class="language-c" data-lang="c"><span class="c1">// https://man7.org/linux/man-pages/man2/bpf.2.html
+</span><span class="c1"></span>
+<span class="n">bpf</span><span class="p">(</span><span class="n">BPF_MAP_CREATE</span><span class="p">,</span> <span class="o">&amp;</span><span class="n">bpf_attr</span><span class="p">,</span> <span class="k">sizeof</span><span class="p">(</span><span class="n">bpf_attr</span><span class="p">));</span>
+
+<span class="k">union</span> <span class="n">bpf_attr</span> <span class="p">{</span>
+  <span class="k">struct</span> <span class="p">{</span> <span class="cm">/* anonymous struct used by BPF_MAP_CREATE command */</span>
+      <span class="n">__u32</span>   <span class="n">map_type</span><span class="p">;</span>       <span class="cm">/* one of enum bpf_map_type */</span>
+      <span class="n">__u32</span>   <span class="n">key_size</span><span class="p">;</span>       <span class="cm">/* size of key in bytes */</span>
+      <span class="n">__u32</span>   <span class="n">value_size</span><span class="p">;</span>     <span class="cm">/* size of value in bytes */</span>
+      <span class="n">__u32</span>   <span class="n">max_entries</span><span class="p">;</span>    <span class="cm">/* max number of entries in a map */</span>
+      <span class="n">__u32</span>   <span class="n">map_flags</span><span class="p">;</span>      <span class="cm">/* prealloc or not */</span>
+  <span class="p">};</span>
+<span class="p">}</span>
+</code></pre></div><p><code>bpf_attr</code> 定义可以从 ELF 二进制的 section <code>.maps</code> 或者 <code>maps</code> 中获取， 如下面的代码片段所示。<code>bpf_map_def</code> 定义数据模式已经被弃用了，如下图所示，加载器需要严格按照固定的偏移量来读取 <code>bpf_attr</code>，相比 BTF 类型系统而言，编码和使用体验都差很多。</p>
+<div class="highlight"><pre class="chroma"><code class="language-c" data-lang="c"><span class="c1">// Use BTF
+</span><span class="c1"></span><span class="k">struct</span> <span class="p">{</span>
+	<span class="n">__uint</span><span class="p">(</span><span class="n">type</span><span class="p">,</span> <span class="n">BPF_MAP_TYPE_HASH</span><span class="p">);</span>
+	<span class="n">__uint</span><span class="p">(</span><span class="n">max_entries</span><span class="p">,</span> <span class="mi">8192</span><span class="p">);</span>
+	<span class="n">__type</span><span class="p">(</span><span class="n">key</span><span class="p">,</span> <span class="n">pid_t</span><span class="p">);</span>
+	<span class="n">__type</span><span class="p">(</span><span class="n">value</span><span class="p">,</span> <span class="n">u64</span><span class="p">);</span>
+<span class="p">}</span> <span class="n">exec_start_btf</span> <span class="n">SEC</span><span class="p">(</span><span class="s">&#34;.maps&#34;</span><span class="p">);</span>
+
+<span class="c1">// Use symbol but it has been deprecated
+</span><span class="c1"></span><span class="k">struct</span> <span class="n">bpf_map_def</span> <span class="nf">SEC</span><span class="p">(</span><span class="s">&#34;maps&#34;</span><span class="p">)</span> <span class="n">exec_start_symbol</span> <span class="o">=</span> <span class="p">{</span>
+	<span class="p">.</span><span class="n">type</span>        <span class="o">=</span> <span class="n">BPF_MAP_TYPE_HASH</span><span class="p">,</span>
+	<span class="p">.</span><span class="n">key_size</span>    <span class="o">=</span> <span class="k">sizeof</span><span class="p">(</span><span class="n">pid_t</span><span class="p">),</span>
+	<span class="p">.</span><span class="n">value_size</span>  <span class="o">=</span> <span class="k">sizeof</span><span class="p">(</span><span class="n">u64</span><span class="p">),</span>
+	<span class="p">.</span><span class="n">max_entries</span> <span class="o">=</span> <span class="mi">8192</span><span class="p">,</span>
+<span class="p">};</span>
+
+<span class="c1">// https://github.com/fuweid/demos/tree/master/ebpf
+</span><span class="c1"></span><span class="err">➜</span>  <span class="n">llvm</span><span class="o">-</span><span class="n">readelf</span> <span class="o">-</span><span class="n">s</span> <span class="o">-</span><span class="n">x</span> <span class="n">maps</span> <span class="p">.</span><span class="o">/</span><span class="p">.</span><span class="n">output</span><span class="o">/</span><span class="n">example</span><span class="o">-</span><span class="n">map</span><span class="o">-</span><span class="n">relo</span><span class="p">.</span><span class="n">bpf</span><span class="p">.</span><span class="n">o</span> 
+
+<span class="n">Symbol</span> <span class="n">table</span> <span class="err">&#39;</span><span class="p">.</span><span class="n">symtab</span><span class="err">&#39;</span> <span class="n">contains</span> <span class="mi">6</span> <span class="nl">entries</span><span class="p">:</span>
+   <span class="nl">Num</span><span class="p">:</span>    <span class="n">Value</span>          <span class="n">Size</span> <span class="n">Type</span>    <span class="n">Bind</span>   <span class="n">Vis</span>       <span class="n">Ndx</span> <span class="n">Name</span>
+     <span class="mi">0</span><span class="o">:</span> <span class="mo">0000000000000000</span>     <span class="mi">0</span> <span class="n">NOTYPE</span>  <span class="n">LOCAL</span>  <span class="n">DEFAULT</span>   <span class="n">UND</span> 
+     <span class="mi">1</span><span class="o">:</span> <span class="mo">0000000000000000</span>     <span class="mi">0</span> <span class="n">SECTION</span> <span class="n">LOCAL</span>  <span class="n">DEFAULT</span>     <span class="mi">2</span> <span class="n">tp</span><span class="o">/</span><span class="n">sched</span><span class="o">/</span><span class="n">sched_process_exec</span>
+     <span class="mi">2</span><span class="o">:</span> <span class="mo">0000000000000000</span>   <span class="mi">184</span> <span class="n">FUNC</span>    <span class="n">GLOBAL</span> <span class="n">DEFAULT</span>     <span class="mi">2</span> <span class="n">handle_exec</span>
+     <span class="mi">3</span><span class="o">:</span> <span class="mo">0000000000000000</span>    <span class="mi">32</span> <span class="n">OBJECT</span>  <span class="n">GLOBAL</span> <span class="n">DEFAULT</span>     <span class="mi">5</span> <span class="n">exec_start_btf</span>
+     <span class="mi">4</span><span class="o">:</span> <span class="mo">0000000000000000</span>    <span class="mi">20</span> <span class="n">OBJECT</span>  <span class="n">GLOBAL</span> <span class="n">DEFAULT</span>     <span class="mi">4</span> <span class="n">exec_start_symbol</span>
+     <span class="mi">5</span><span class="o">:</span> <span class="mo">0000000000000000</span>    <span class="mi">13</span> <span class="n">OBJECT</span>  <span class="n">GLOBAL</span> <span class="n">DEFAULT</span>     <span class="mi">3</span> <span class="n">LICENSE</span>
+<span class="n">Hex</span> <span class="n">dump</span> <span class="n">of</span> <span class="n">section</span> <span class="err">&#39;</span><span class="n">maps</span><span class="err">&#39;</span><span class="o">:</span>
+          <span class="p">.</span><span class="n">type</span><span class="o">=</span><span class="mi">1</span>     <span class="p">.</span><span class="n">key_size</span><span class="o">=</span><span class="mi">4</span>   <span class="p">.</span><span class="n">value_size</span><span class="o">=</span><span class="mi">8</span>   <span class="p">.</span><span class="n">max_entries</span> <span class="o">=</span> <span class="mi">8192</span>
+<span class="mh">0x00000000</span> <span class="mo">01000000</span>   <span class="mo">04000000</span>      <span class="mi">08000000</span>        <span class="mo">00200000</span> <span class="p">.............</span> <span class="p">..</span>
+          <span class="p">.</span><span class="n">flags</span><span class="o">=</span><span class="mi">0</span>
+<span class="mh">0x00000010</span> <span class="mo">00000000</span>
+</code></pre></div><p>当加载器读取 eBPF ELF 时， 代码段 section, 比如 <code>tp/sched/sched_process_exec</code>, 其对应的重定向符号的偏移量会在 <code>.reltp/sched/sched_process_exec</code> 描述，如下面的结果所示，其中 <code>18 01 00 00 00 00 00 00 00 00 00 00 00 00 00 00</code> DWORD 指令将是我们要替换的指令。</p>
+<div class="highlight"><pre class="chroma"><code class="language-bash" data-lang="bash">➜  llvm-objdump -dr ./.output/example-map-relo-btf.bpf.o
+
+./.output/example-map-relo-btf.bpf.o:	file format elf64-bpf
+
+
+Disassembly of section tp/sched/sched_process_exec:
+
+<span class="m">0000000000000000</span> &lt;handle_exec&gt;:
+       0:	<span class="m">85</span> <span class="m">00</span> <span class="m">00</span> <span class="m">00</span> 0e <span class="m">00</span> <span class="m">00</span> 00	call <span class="m">14</span>
+       1:	<span class="m">77</span> <span class="m">00</span> <span class="m">00</span> <span class="m">00</span> <span class="m">20</span> <span class="m">00</span> <span class="m">00</span> 00	r0 &gt;&gt;<span class="o">=</span> <span class="m">32</span>
+       2:	<span class="m">63</span> 0a <span class="nb">fc</span> ff <span class="m">00</span> <span class="m">00</span> <span class="m">00</span> 00	*<span class="o">(</span>u32 *<span class="o">)(</span>r10 - 4<span class="o">)</span> <span class="o">=</span> r0
+       3:	<span class="m">85</span> <span class="m">00</span> <span class="m">00</span> <span class="m">00</span> <span class="m">05</span> <span class="m">00</span> <span class="m">00</span> 00	call <span class="m">5</span>
+       4:	7b 0a f0 ff <span class="m">00</span> <span class="m">00</span> <span class="m">00</span> 00	*<span class="o">(</span>u64 *<span class="o">)(</span>r10 - 16<span class="o">)</span> <span class="o">=</span> r0
+       5:	bf a2 <span class="m">00</span> <span class="m">00</span> <span class="m">00</span> <span class="m">00</span> <span class="m">00</span> 00	<span class="nv">r2</span> <span class="o">=</span> r10
+       6:	<span class="m">07</span> <span class="m">02</span> <span class="m">00</span> <span class="m">00</span> <span class="nb">fc</span> ff ff ff	<span class="nv">r2</span> <span class="o">+=</span> -4
+       7:	bf a3 <span class="m">00</span> <span class="m">00</span> <span class="m">00</span> <span class="m">00</span> <span class="m">00</span> 00	<span class="nv">r3</span> <span class="o">=</span> r10
+       8:	<span class="m">07</span> <span class="m">03</span> <span class="m">00</span> <span class="m">00</span> f0 ff ff ff	<span class="nv">r3</span> <span class="o">+=</span> -16
+       9:	<span class="m">18</span> <span class="m">01</span> <span class="m">00</span> <span class="m">00</span> <span class="m">00</span> <span class="m">00</span> <span class="m">00</span> <span class="m">00</span> <span class="m">00</span> <span class="m">00</span> <span class="m">00</span> <span class="m">00</span> <span class="m">00</span> <span class="m">00</span> <span class="m">00</span> 00	<span class="nv">r1</span> <span class="o">=</span> <span class="m">0</span> ll
+		0000000000000048:  R_BPF_64_64	exec_start_btf
+      11:	b7 <span class="m">04</span> <span class="m">00</span> <span class="m">00</span> <span class="m">00</span> <span class="m">00</span> <span class="m">00</span> 00	<span class="nv">r4</span> <span class="o">=</span> <span class="m">0</span>
+      12:	<span class="m">85</span> <span class="m">00</span> <span class="m">00</span> <span class="m">00</span> <span class="m">02</span> <span class="m">00</span> <span class="m">00</span> 00	call <span class="m">2</span>
+      13:	<span class="m">95</span> <span class="m">00</span> <span class="m">00</span> <span class="m">00</span> <span class="m">00</span> <span class="m">00</span> <span class="m">00</span> 00	<span class="nb">exit</span>
+
+➜  llvm-readelf -r ./.output/example-map-relo-btf.bpf.o
+
+Relocation section <span class="s1">&#39;.reltp/sched/sched_process_exec&#39;</span> at offset 0x6d8 contains <span class="m">1</span> entries:
+    Offset             Info             Type               Symbol<span class="s1">&#39;s Value  Symbol&#39;</span>s Name
+<span class="m">0000000000000048</span>  <span class="m">0000000300000001</span> R_BPF_64_64            <span class="m">0000000000000000</span> exec_start_btf
+</code></pre></div><p>当前阅读最新的内核文档 (v5.17.0-rc5) 没有说明如何替换 eBPF Map 符号指令，反倒是 <a href="https://github.com/libbpf/libbpf">libbpf</a> 加载器中有说明：当指令类型为 LD_IMM64 且原寄存器编号不为 0 时，那么该指令可以被重写成 MAP 相关的操作，重写规则如下面的代码所示。回顾上头要被替换指令，其开头 <code>18</code> 为 LD_IMM64 且 <code>01</code> 是 <code>r1</code> 寄存器， 替换的 Map 符号符合该模式；因此通过 BPF 系统调用申请 Map 文件句柄之后，加载器可以把代码段中第 52 个 Byte 替换成对应的文件句柄即可。</p>
+<p>需要说明的是，替换的并不是 <code>.reltp/sched/sched_process_exec</code> 中提到的第 48 Byte。BPF 并不采用 <a href="https://llvm.org/doxygen/structllvm_1_1ELF_1_1Elf64__Rela.html">Elf64_Rela</a> 来携带 Addend， 而是<a href="https://www.kernel.org/doc/html/latest/bpf/llvm_reloc.html#different-relocation-types">针对不同的重定向类型作了特殊的约定</a>， 比如 <code>R_BPF_64_64</code> 类型的替换地址为 <code>重定向声明的偏移量 + 4 = 48 + 4 = 52</code>。</p>
+<div class="highlight"><pre class="chroma"><code class="language-c" data-lang="c"><span class="c1">// https://github.com/libbpf/libbpf/blob/v0.7.0/include/uapi/linux/bpf.h#L1121
+</span><span class="c1"></span>
+<span class="cm">/* When BPF ldimm64&#39;s insn[0].src_reg != 0 then this can have
+</span><span class="cm"> * the following extensions:
+</span><span class="cm"> *
+</span><span class="cm"> * insn[0].src_reg:  BPF_PSEUDO_MAP_[FD|IDX]
+</span><span class="cm"> * insn[0].imm:      map fd or fd_idx
+</span><span class="cm"> * insn[1].imm:      0
+</span><span class="cm"> * insn[0].off:      0
+</span><span class="cm"> * insn[1].off:      0
+</span><span class="cm"> * ldimm64 rewrite:  address of map
+</span><span class="cm"> * verifier type:    CONST_PTR_TO_MAP
+</span><span class="cm"> */</span>
+<span class="cp">#define BPF_PSEUDO_MAP_FD	1
+</span><span class="cp">#define BPF_PSEUDO_MAP_IDX	5
+</span></code></pre></div><p>为了方便用户态修改程序中的只读常量，clang/llvm 会将 <code>const volatile</code> 声明的全局变量合并成一个结构体，并将为其声明成只有 <strong>[一个元素的 Map]</strong>，数据按照顺序存储在第一个 Value 里。因为不同变量在结构体的偏移量不同，那么指令改写逻辑有点差异，如下面的代码所示。</p>
+<div class="highlight"><pre class="chroma"><code class="language-c" data-lang="c"><span class="c1">// https://github.com/libbpf/libbpf/blob/v0.7.0/include/uapi/linux/bpf.h#L1135
+</span><span class="c1"></span>
+<span class="cm">/* insn[0].src_reg:  BPF_PSEUDO_MAP_[IDX_]VALUE
+</span><span class="cm"> * insn[0].imm:      map fd or fd_idx
+</span><span class="cm"> * insn[1].imm:      offset into value
+</span><span class="cm"> * insn[0].off:      0
+</span><span class="cm"> * insn[1].off:      0
+</span><span class="cm"> * ldimm64 rewrite:  address of map[0]+offset
+</span><span class="cm"> * verifier type:    PTR_TO_MAP_VALUE
+</span><span class="cm"> */</span>
+<span class="cp">#define BPF_PSEUDO_MAP_VALUE		2
+</span><span class="cp">#define BPF_PSEUDO_MAP_IDX_VALUE	6
+</span></code></pre></div><p>不过使用的时候一定要注意用户态的类似是不是和 eBPF 程序中的一致，感兴趣的可以查看 <a href="https://github.com/iovisor/bcc/pull/3777">iovisor/bcc#3777</a>。</p>
+<h4 id="22-field-offset-rewrite">2.2 Field Offset Rewrite</h4>
+<p>前面提到了 Linux 内核社区设计可压缩的 BTF 格式，我们通过工具转化 DWARF 数据成 BTF，那么内核里所有的数据结构都可以通过 BTF 反推成 C 头文件。当我们有了这个 All-in-One 头文件，那我们就不再需要在安装 kernel-headers 了！没人喜欢安装一堆依赖，不是吗？！</p>
+<div class="highlight"><pre class="chroma"><code class="language-bash" data-lang="bash">➜  bpftool btf dump file /sys/kernel/btf/vmlinux format c &gt; vmlinux.h
+</code></pre></div><p>我们来看一个具体的例子吧， <a href="https://github.com/fuweid/demos/blob/master/ebpf/example-field-offset-rewrite.bpf.c">example-field-offset-rewrite</a> 读取当前 exec 进程 <code>task_struct</code> 结构体，并返回它的 <code>real_parent</code> 的 pid。如下图所示，我们可以看到没有加载前的访问指令是符合 vmlinux.c 描述的偏移量的：</p>
+<ul>
+<li><code>real_parent</code> 在 <code>task</code> 变量的 <code>9472 bits = 1184 bytes</code> 的位置；</li>
+<li>同时 <code>real_parent</code> 本身也是一个 <code>task_struct</code> 类型的变量，它的 <code>pid</code> 字段将在 <code>9344 bits = 1168 bytes</code> 位置读取。</li>
+</ul>
+<div class="highlight"><pre class="chroma"><code class="language-bash" data-lang="bash">➜  llvm-objdump -dr ./.output/example-field-offset-rewrite.bpf.o
+
+./.output/example-field-offset-rewrite.bpf.o:	file format elf64-bpf
+
+
+Disassembly of section tp/sched/sched_process_exec:
+
+<span class="m">0000000000000000</span> &lt;handle_exec&gt;:
+       0:	<span class="m">85</span> <span class="m">00</span> <span class="m">00</span> <span class="m">00</span> <span class="m">23</span> <span class="m">00</span> <span class="m">00</span> 00	call <span class="m">35</span>
+       // 使用 Ubuntu v5.8 内核 BTF dump 出来的 vmlinux.c 
+       // <span class="o">[</span>596<span class="o">]</span> STRUCT task_struct <span class="nv">size</span><span class="o">=</span><span class="m">6848</span>
+       //   ...
+       //   real_parent <span class="nv">type_id</span><span class="o">=</span><span class="m">594</span> <span class="nv">bitfield_size</span><span class="o">=</span><span class="m">0</span> <span class="nv">bits_offset</span><span class="o">=</span><span class="m">9472</span>
+       1:	b7 <span class="m">01</span> <span class="m">00</span> <span class="m">00</span> a0 <span class="m">04</span> <span class="m">00</span> 00	<span class="nv">r1</span> <span class="o">=</span> <span class="m">1184</span>  &lt;<span class="o">==</span> <span class="m">1184</span> Bytes
+       2:	0f <span class="m">10</span> <span class="m">00</span> <span class="m">00</span> <span class="m">00</span> <span class="m">00</span> <span class="m">00</span> 00	<span class="nv">r0</span> <span class="o">+=</span> r1
+       3:	bf a1 <span class="m">00</span> <span class="m">00</span> <span class="m">00</span> <span class="m">00</span> <span class="m">00</span> 00	<span class="nv">r1</span> <span class="o">=</span> r10
+       4:	<span class="m">07</span> <span class="m">01</span> <span class="m">00</span> <span class="m">00</span> f0 ff ff ff	<span class="nv">r1</span> <span class="o">+=</span> -16
+       5:	b7 <span class="m">02</span> <span class="m">00</span> <span class="m">00</span> <span class="m">08</span> <span class="m">00</span> <span class="m">00</span> 00	<span class="nv">r2</span> <span class="o">=</span> <span class="m">8</span>
+       6:	bf <span class="m">03</span> <span class="m">00</span> <span class="m">00</span> <span class="m">00</span> <span class="m">00</span> <span class="m">00</span> 00	<span class="nv">r3</span> <span class="o">=</span> r0
+
+      // bpf_probe_read 调用读出 real_parent <span class="nv">task_struct</span> <span class="o">==</span> task-&gt;real_parent
+       7:	<span class="m">85</span> <span class="m">00</span> <span class="m">00</span> <span class="m">00</span> <span class="m">71</span> <span class="m">00</span> <span class="m">00</span> 00	call <span class="m">113</span>
+
+      // <span class="o">[</span>596<span class="o">]</span> STRUCT task_struct <span class="nv">size</span><span class="o">=</span><span class="m">6848</span>
+      //   ...
+      // pid <span class="nv">type_id</span><span class="o">=</span><span class="m">1800</span> <span class="nv">bitfield_size</span><span class="o">=</span><span class="m">0</span> <span class="nv">bits_offset</span><span class="o">=</span><span class="m">9344</span>
+       8:	b7 <span class="m">01</span> <span class="m">00</span> <span class="m">00</span> <span class="m">90</span> <span class="m">04</span> <span class="m">00</span> 00	<span class="nv">r1</span> <span class="o">=</span> <span class="m">1168</span>
+       9:	<span class="m">79</span> a3 f0 ff <span class="m">00</span> <span class="m">00</span> <span class="m">00</span> 00	<span class="nv">r3</span> <span class="o">=</span> *<span class="o">(</span>u64 *<span class="o">)(</span>r10 - 16<span class="o">)</span>
+      10:	0f <span class="m">13</span> <span class="m">00</span> <span class="m">00</span> <span class="m">00</span> <span class="m">00</span> <span class="m">00</span> 00	<span class="nv">r3</span> <span class="o">+=</span> r1
+      11:	bf a1 <span class="m">00</span> <span class="m">00</span> <span class="m">00</span> <span class="m">00</span> <span class="m">00</span> 00	<span class="nv">r1</span> <span class="o">=</span> r10
+      12:	<span class="m">07</span> <span class="m">01</span> <span class="m">00</span> <span class="m">00</span> <span class="nb">fc</span> ff ff ff	<span class="nv">r1</span> <span class="o">+=</span> -4
+      13:	b7 <span class="m">02</span> <span class="m">00</span> <span class="m">00</span> <span class="m">04</span> <span class="m">00</span> <span class="m">00</span> 00	<span class="nv">r2</span> <span class="o">=</span> <span class="m">4</span>
+      14:	<span class="m">85</span> <span class="m">00</span> <span class="m">00</span> <span class="m">00</span> <span class="m">71</span> <span class="m">00</span> <span class="m">00</span> 00	call <span class="m">113</span>
+      15:	<span class="m">61</span> a0 <span class="nb">fc</span> ff <span class="m">00</span> <span class="m">00</span> <span class="m">00</span> 00	<span class="nv">r0</span> <span class="o">=</span> *<span class="o">(</span>u32 *<span class="o">)(</span>r10 - 4<span class="o">)</span>
+      16:	<span class="m">95</span> <span class="m">00</span> <span class="m">00</span> <span class="m">00</span> <span class="m">00</span> <span class="m">00</span> <span class="m">00</span> 00	<span class="nb">exit</span>
+</code></pre></div><p>但上面的 eBPF 指令访问 <code>task_struct</code> 内部字段是基于 v5.8 内核 BTF 构建的，和我当前的 v5.13.0 内核版本存在较大的差异， <code>real_parent</code> 和 <code>pid</code> 偏移量都变化较多。而且 <code>llvm-objdump -dr</code> 并没有显示哪些 [读取字段的指令] 需要替换。由于这部分指令修改策略还没有更新到当前最新的 <code>v5.17.0-rc5</code> 版本上，只能通过阅读代码来获取。</p>
+<div class="highlight"><pre class="chroma"><code class="language-bash" data-lang="bash">➜  uname -a
+Linux chaofan 5.13.0-30-generic <span class="c1">#33~20.04.1-Ubuntu SMP Mon Feb 7 14:25:10 UTC 2022 x86_64 x86_64 x86_64 GNU/Linux</span>
+
+➜  bpftool btf dump file /sys/kernel/btf/vmlinux <span class="p">|</span> less
+...
+<span class="o">[</span>174<span class="o">]</span> STRUCT <span class="s1">&#39;task_struct&#39;</span> <span class="nv">size</span><span class="o">=</span><span class="m">9472</span> <span class="nv">vlen</span><span class="o">=</span><span class="m">232</span>
+...
+  <span class="s1">&#39;real_parent&#39;</span> <span class="nv">type_id</span><span class="o">=</span><span class="m">175</span> <span class="nv">bits_offset</span><span class="o">=</span><span class="m">18816</span>
+  <span class="s1">&#39;pid&#39;</span> <span class="nv">type_id</span><span class="o">=</span><span class="m">60</span> <span class="nv">bits_offset</span><span class="o">=</span><span class="m">18688</span>
+</code></pre></div><p>通过查看代码，我发现主要由三个 Patch 来提供替换的编码信息：</p>
+<ul>
+<li><a href="https://reviews.llvm.org/rG048493f882faf19d80a1343d877d69cbb19c5091">[BPF] Preserve debuginfo array/union/struct type/access index</a></li>
+<li><a href="https://lore.kernel.org/bpf/20190801064803.2519675-9-andriin@fb.com/t/">CO-RE offset relocations</a></li>
+<li><a href="https://lore.kernel.org/bpf/20211124060209.493-1-alexei.starovoitov@gmail.com/">bpf: CO-RE support in the kernel</a></li>
+</ul>
+<p>其中 llvm 的 Patch 做到了在 BTF 中保留对内核数据结构的访问路径, 如下面的代码片段所示， 目前 libbpf 加载器一次的访问路径的最大深度为 9。</p>
+<div class="highlight"><pre class="chroma"><code class="language-c" data-lang="c"><span class="c1">// https://github.com/cilium/ebpf/blob/v0.8.1/internal/btf/core.go#L435
+</span><span class="c1"></span><span class="k">struct</span> <span class="n">sample</span> <span class="p">{</span>
+  <span class="kt">int</span> <span class="n">a</span><span class="p">;</span>
+  <span class="k">struct</span> <span class="p">{</span>
+    <span class="kt">int</span> <span class="n">b</span><span class="p">[</span><span class="mi">10</span><span class="p">];</span>
+  <span class="p">}</span>
+<span class="p">};</span>
+
+<span class="k">struct</span> <span class="n">sample</span> <span class="n">s</span> <span class="o">=</span> <span class="p">...;</span>                                                                                         
+<span class="kt">int</span> <span class="n">x</span> <span class="o">=</span> <span class="o">&amp;</span><span class="n">s</span><span class="o">-&gt;</span><span class="n">a</span><span class="p">;</span>     <span class="c1">// encoded as &#34;0:0&#34; (a is field #0)
+</span><span class="c1"></span><span class="kt">int</span> <span class="n">y</span> <span class="o">=</span> <span class="o">&amp;</span><span class="n">s</span><span class="o">-&gt;</span><span class="n">b</span><span class="p">[</span><span class="mi">5</span><span class="p">];</span>  <span class="c1">// encoded as &#34;0:1:0:5&#34; (anon struct is field #1,
+</span><span class="c1"></span>                   <span class="c1">// b is field #0 inside anon struct, accessing elem #5)
+</span><span class="c1"></span><span class="kt">int</span> <span class="n">z</span> <span class="o">=</span> <span class="o">&amp;</span><span class="n">s</span><span class="p">[</span><span class="mi">10</span><span class="p">]</span><span class="o">-&gt;</span><span class="n">b</span><span class="p">;</span> <span class="c1">// encoded as &#34;10:1&#34; (ptr is used as an array)
+</span><span class="c1"></span>
+<span class="c1">// More info： https://llvm.org/docs/LangRef.html#getelementptr-instruction
+</span></code></pre></div><p>而 <code>0:1:0:5</code> 这样的信息作为字符串保存在 <code>.BTF</code> section 中，而重写指令的偏移量则保存在 <code>.BTF.ext</code> 的 sub-section 中，具体的数据结构如下：</p>
+<div class="highlight"><pre class="chroma"><code class="language-c" data-lang="c"><span class="c1">// https://www.kernel.org/doc/html/latest/bpf/btf.html
+</span><span class="c1"></span><span class="k">struct</span> <span class="n">btf_ext_info_sec</span> <span class="p">{</span>
+   <span class="n">__u32</span>   <span class="n">sec_name_off</span><span class="p">;</span> <span class="cm">/* offset to section name */</span>
+   <span class="n">__u32</span>   <span class="n">num_info</span><span class="p">;</span>
+   <span class="cm">/* Followed by num_info * record_size number of bytes */</span>
+   <span class="n">__u8</span>    <span class="n">data</span><span class="p">[</span><span class="mi">0</span><span class="p">];</span>
+<span class="p">};</span>
+
+<span class="c1">// https://github.com/libbpf/libbpf/blob/v0.7.0/include/uapi/linux/bpf.h#L6560
+</span><span class="c1"></span><span class="k">struct</span> <span class="n">bpf_core_relo</span> <span class="p">{</span>
+  <span class="n">__u32</span> <span class="n">insn_off</span><span class="p">;</span>              <span class="c1">// 一开始是 section 偏移量，读出来一般都会修改成 [基于所在函数的偏移量]，
+</span><span class="c1"></span>                               <span class="c1">// 方便后续不同 section 函数指令合并后的指令重写。
+</span><span class="c1"></span>
+  <span class="n">__u32</span> <span class="n">type_id</span><span class="p">;</span>               <span class="c1">// 以上面 struct sample，那么 type_id 为 struct sample 的 BTF ID                                            
+</span><span class="c1"></span>  <span class="n">__u32</span> <span class="n">access_str_off</span><span class="p">;</span>        <span class="c1">// 0:1:0:5 
+</span><span class="c1"></span>  <span class="k">enum</span> <span class="n">bpf_core_relo_kind</span> <span class="n">kind</span><span class="p">;</span>
+<span class="p">};</span>
+
+<span class="c1">// sub-section layout about bpf_core_relo
+</span><span class="c1"></span><span class="n">btf_ext_info_sec</span> <span class="k">for</span> <span class="n">section</span> <span class="err">#</span><span class="mi">1</span> <span class="cm">/* bpf_core_relo for section #1 */</span>
+<span class="n">btf_ext_info_sec</span> <span class="k">for</span> <span class="n">section</span> <span class="err">#</span><span class="mi">2</span> <span class="cm">/* bpf_core_relo for section #2 */</span>
+<span class="p">...</span>
+
+</code></pre></div><p>有了这样访问路径信息后，加载器会读出本地 BTF 信息按照访问路径进行相应的结构体匹配，当然这里是 [尽力去找最匹配的结果]，比如结构体的名字要一致，相应的结构体大小要一致等等。如果存在匹配结果，那么 <code>bpf_core_relo.insn_off</code> 对应的指令将会被修改； 否则，加载将会返回失败。</p>
+<p>[一次编译，到处运行] 将 eBPF 使用体验都提升了好几个档次，想想看，OCI Artifacts 是不是可以 eBPF 程序作分发标准化呢？!</p>
+<h4 id="23-call-insn-on-pc-relative">2.3 CALL INSN on pc-relative?</h4>
+<p>eBPF 是将每一个函数挂到相应的事件触发器上。一般来说，调用自定义的函数都会被 inlined 掉，即使代码段不在同一个 section 里。如下面的代码所示，这样程序是不需要重写指令的。</p>
+<div class="highlight"><pre class="chroma"><code class="language-bash" data-lang="bash"><span class="c1"># https://github.com/fuweid/demos/blob/master/ebpf/example-func-inline.bpf.c</span>
+➜  llvm-objdump -dr ./.output/example-func-inline.bpf.o
+
+./.output/example-func-inline.bpf.o:	file format elf64-bpf
+
+
+Disassembly of section .text:
+
+<span class="m">0000000000000000</span> &lt;double_ts_in_text&gt;:
+       0:	bf <span class="m">10</span> <span class="m">00</span> <span class="m">00</span> <span class="m">00</span> <span class="m">00</span> <span class="m">00</span> 00	<span class="nv">r0</span> <span class="o">=</span> r1
+       1:	<span class="m">67</span> <span class="m">00</span> <span class="m">00</span> <span class="m">00</span> <span class="m">01</span> <span class="m">00</span> <span class="m">00</span> 00	r0 &lt;&lt;<span class="o">=</span> <span class="m">1</span>
+       2:	<span class="m">95</span> <span class="m">00</span> <span class="m">00</span> <span class="m">00</span> <span class="m">00</span> <span class="m">00</span> <span class="m">00</span> 00	<span class="nb">exit</span>
+
+Disassembly of section tp/sched/sched_process_exec:
+
+<span class="c1"># 全部 inlined 到 handle_exec， 无需跳转</span>
+<span class="m">0000000000000000</span> &lt;handle_exec&gt;:
+       0:	<span class="m">85</span> <span class="m">00</span> <span class="m">00</span> <span class="m">00</span> <span class="m">05</span> <span class="m">00</span> <span class="m">00</span> 00	call <span class="m">5</span>
+       1:	<span class="m">67</span> <span class="m">00</span> <span class="m">00</span> <span class="m">00</span> <span class="m">01</span> <span class="m">00</span> <span class="m">00</span> 00	r0 &lt;&lt;<span class="o">=</span> <span class="m">1</span>
+       2:	<span class="m">95</span> <span class="m">00</span> <span class="m">00</span> <span class="m">00</span> <span class="m">00</span> <span class="m">00</span> <span class="m">00</span> 00	<span class="nb">exit</span>
+</code></pre></div><p>如果 <code>double_ts</code> 函数不 inlined，那么编译后的结果如下。可以看到函数代码段在不同的 Section 中，加载器需要把所有相关的代码片段都 [追加] 到 <code>handle_exec</code> 的末尾，然后根据重定向的偏移量来修改指令。</p>
+<p>需要注意的是，内核文档在描述 eBPF CALL 指令时并没有说 Immediate 是不是相对值。我是通过查看 libbpf 加载器中 <a href="https://github.com/libbpf/libbpf/blob/v0.7.0/include/uapi/linux/bpf.h#L1166">BPF_PSEUDO_CALL</a> 描述才知道这是一个相对值，偏移量的计算也是 <a href="https://www.kernel.org/doc/html/latest/bpf/llvm_reloc.html#different-relocation-types">约定值</a>。函数调用重写相比 MAP/Field Offset 重写要简单些，一般这部分的指令修改都是放到最后做。</p>
+<div class="highlight"><pre class="chroma"><code class="language-bash" data-lang="bash"><span class="c1"># https://github.com/fuweid/demos/blob/master/ebpf/example-func-noinline.bpf.c</span>
+
+➜  llvm-objdump -dr ./.output/example-func-noinline.bpf.o
+
+./.output/example-func-noinline.bpf.o:	file format elf64-bpf
+
+
+Disassembly of section .text:
+
+<span class="m">0000000000000000</span> &lt;double_ts&gt;:
+       0:	bf <span class="m">10</span> <span class="m">00</span> <span class="m">00</span> <span class="m">00</span> <span class="m">00</span> <span class="m">00</span> 00	<span class="nv">r0</span> <span class="o">=</span> r1
+       1:	<span class="m">67</span> <span class="m">00</span> <span class="m">00</span> <span class="m">00</span> <span class="m">01</span> <span class="m">00</span> <span class="m">00</span> 00	r0 &lt;&lt;<span class="o">=</span> <span class="m">1</span>
+       2:	<span class="m">95</span> <span class="m">00</span> <span class="m">00</span> <span class="m">00</span> <span class="m">00</span> <span class="m">00</span> <span class="m">00</span> 00	<span class="nb">exit</span>
+
+Disassembly of section tp/sched/sched_process_exec:
+
+<span class="m">0000000000000000</span> &lt;handle_exec&gt;:
+       0:	<span class="m">85</span> <span class="m">00</span> <span class="m">00</span> <span class="m">00</span> <span class="m">05</span> <span class="m">00</span> <span class="m">00</span> 00	call <span class="m">5</span>
+       1:	bf <span class="m">01</span> <span class="m">00</span> <span class="m">00</span> <span class="m">00</span> <span class="m">00</span> <span class="m">00</span> 00	<span class="nv">r1</span> <span class="o">=</span> r0
+       2:	<span class="m">85</span> <span class="m">10</span> <span class="m">00</span> <span class="m">00</span> ff ff ff ff	call -1
+		0000000000000010:  R_BPF_64_32	.text
+       3:	<span class="m">95</span> <span class="m">00</span> <span class="m">00</span> <span class="m">00</span> <span class="m">00</span> <span class="m">00</span> <span class="m">00</span> 00	<span class="nb">exit</span>
+
+<span class="c1"># 修改后的结果 dump from kernel</span>
+int handle_exec<span class="o">(</span>struct trace_event_raw_sched_process_exec * ctx<span class="o">)</span>:
+<span class="p">;</span> <span class="nv">ts</span> <span class="o">=</span> bpf_ktime_get_ns<span class="o">()</span><span class="p">;</span>
+   0: <span class="o">(</span>85<span class="o">)</span> call bpf_ktime_get_ns#135136
+<span class="p">;</span> <span class="nv">ts</span> <span class="o">=</span> double_ts<span class="o">(</span>ts<span class="o">)</span><span class="p">;</span>
+   1: <span class="o">(</span>bf<span class="o">)</span> <span class="nv">r1</span> <span class="o">=</span> r0
+   2: <span class="o">(</span>85<span class="o">)</span> call pc+1#bpf_prog_6aadb6445c8badae_F
+<span class="p">;</span> <span class="k">return</span> ts<span class="p">;</span>
+   3: <span class="o">(</span>95<span class="o">)</span> <span class="nb">exit</span>
+u64 double_ts<span class="o">(</span>u64 ts<span class="o">)</span>:
+<span class="p">;</span> u64 double_ts<span class="o">(</span>u64 ts<span class="o">)</span> <span class="o">{</span>
+   4: <span class="o">(</span>bf<span class="o">)</span> <span class="nv">r0</span> <span class="o">=</span> r1
+<span class="p">;</span> <span class="k">return</span> ts + ts<span class="p">;</span>
+   5: <span class="o">(</span>67<span class="o">)</span> r0 &lt;&lt;<span class="o">=</span> <span class="m">1</span>
+<span class="p">;</span> <span class="k">return</span> ts + ts<span class="p">;</span>
+   6: <span class="o">(</span>95<span class="o">)</span> <span class="nb">exit</span>
+</code></pre></div><h3 id="30-conclusion">3.0 Conclusion</h3>
+<p>本文只是简单介绍了 eBPF 加载器是怎么修改指令的，虽然还有很多细节没有提到，比如 <code>CALL bpf_ktime_get_ns</code> 指令是如何工作，以及 eBPF 尾调用如何拼接在一起等等，但大体的工作方式差不多，建议读一读 libbpf 加载器，或者 <a href="https://github.com/cilium/ebpf">cilium/ebpf go 代码</a>，还是比较有意思的。</p>
+
+            </article>
+        </div>
+
+        <footer>
+    &copy; 2022 Wei Fu
+</footer>
+
+<script>
+    function doPrettify(){
+        pres=document.getElementsByTagName('pre');
+        for (i=0; i < pres.length; i++) {
+            pres[i].className+=" prettyprint";
+        }
+        prettyPrint();
+    }
+</script>
+
+
+<script async src="https://www.googletagmanager.com/gtag/js?id=G-1C7VLVHN52"></script>
+<script>
+  window.dataLayer = window.dataLayer || [];
+  function gtag(){dataLayer.push(arguments);}
+  gtag('js', new Date());
+
+  gtag('config', 'G-1C7VLVHN52');
+</script>
+
+    </body>
+</html>
