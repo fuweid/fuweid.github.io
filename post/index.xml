@@ -5,10 +5,22 @@
     <link>https://fuweid.com/post/</link>
     <description>Recent content in Posts on FuWei</description>
     <generator>Hugo -- gohugo.io</generator>
-    <lastBuildDate>Sun, 27 Feb 2022 23:00:53 +0800</lastBuildDate>
+    <lastBuildDate>Thu, 10 Mar 2022 00:00:45 +0800</lastBuildDate>
     
 	<atom:link href="https://fuweid.com/post/index.xml" rel="self" type="application/rss+xml" />
     
+    
+    <item>
+      <title>Towards truly portable eBPF</title>
+      <link>https://fuweid.com/post/2022-ebpf-portable-with-btfhub/</link>
+      <pubDate>Thu, 10 Mar 2022 00:00:45 +0800</pubDate>
+      
+      <guid>https://fuweid.com/post/2022-ebpf-portable-with-btfhub/</guid>
+      <description>在上一篇 eBPF Loader 中介绍了 eBPF 加载器的工作原理。Compile-Once Run-Everywhere (CO-RE) 是目前社区的发力方向，但它要求内核版本支持 CONFIG_DEBUG_INFO_BTF=y 特性。除了 REHL 等商业公司会回合高版本特性到当前支持的商业版本之外，大部分社区免费版本都要求 &amp;gt;= 5.5 版本的内核。为了能在当前主流的 4.14, 4.15, 4.18, 4.19 内核版本上支持 eBPF CO-RE 特性， Aqua Security 的工程师在 2021 Linux Plumbers Conference - Towards truly portable eBPF 议题上展示了它们的想法: BTF-Hub + Embedded BTF。
+1. BPF Portable 作为用户提供的程序片段，eBPF bytecode 可直接注入到 linux 内核里直接读取和操作内核运行态的内存数据，它的可观测性和对内核模块的可拓展性受到系统开发者的青睐。这是它强大的优势，但同时也是一大痛点：只有获得了目标内核版本的头文件才能保证 eBPF 程序能正确地访问内存数据。
+早期在使用 bcc 诊断工具时，我们需要 llvm/clang 做 eBPF 实时编译；如果开发 - 测试 - 线上环境没有做到版本的强一致，那么即使逃过了 BPF Verifier 的审判，程序也会因为没有正确地读取内存 (偏移地址不正确) 而出现非预期的行为。
+虽然 eBPF 程序的非预期行为不会导致内核崩溃，但研发体验和内核模块开发差别不大：eBPF 开发者还是需要针对不同的内核版本编译出不同的版本，线上内核版本越多，测试上线的成本就越高。下图为 Falco 为不同版本提供的内核模块；如果 eBPF 没有移植能力的话，它的发布模式其实和普通的内核模块差别不大。一次构建，到处运行 的能力直到 BPF Type Format (BTF) 的出现才有了质的飞跃。</description>
+    </item>
     
     <item>
       <title>eBPF Loader</title>

@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html>
+    <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+    <title>
+        
+            FuWei: Towards truly portable eBPF
+        
+    </title>
+
+    <meta property="og:title" content="Towards truly portable eBPF"/>
+    <meta property="og:Section" content="website"/>
+    <meta property="og:url" content="https://fuweid.com/post/2022-ebpf-portable-with-btfhub/"/>
+    <meta property="og:image" content="https://fuweid.com/favicon.jpg"/>
+    <meta property="og:site_name" content="FuWei"/>
+    <meta property="og:description" content="如何在低内核版本实现 eBPF CO-RE ?"/>
+
+    <link rel="stylesheet" href="/css/fontawesome/all.css" />
+    <link rel="stylesheet" href="/css/main.css" /> 
+    <link rel="stylesheet" href="/css/normalize.css">
+    <link rel="stylesheet" href="/css/prettify.css">
+    <link rel="shortcut icon" href="https://fuweid.com/favicon.jpg">
+    <link rel="icon" href="https://fuweid.com/favicon.jpg">
+    <script type="text/javascript" src="/js/prettify.js"></script>
+</head>
+
+
+    <body onload="doPrettify()">
+        <header>
+    <nav>
+        <ul class="home">
+            <li>
+                <a href="https://fuweid.com/">FuWei</a>
+            </li>
+        </ul>
+        <ul class="social">
+            <li>
+                <a class="fab fa-github" href="https://github.com/fuweid" target="_blank"></a>
+            </li>
+            <li>
+                <a class="fab fa-twitter" href="https://twitter.com/fuweid89" target="_blank"></a>
+            </li>
+            <li>
+                <a class="fas fa-rss" href="https://fuweid.com//index.xml" target="_blank"></a>
+            </li>
+        </ul>
+    </nav>
+</header>
+
+
+        <div class="container">
+            <article class="single">
+                <h2 class="title"> Towards truly portable eBPF </h2>
+                <h5 class="time"> March 10, 2022 </h5>
+                <p>在上一篇 <a href="https://fuweid.com/post/2022-ebpf-loader/">eBPF Loader</a> 中介绍了 eBPF 加载器的工作原理。Compile-Once Run-Everywhere (CO-RE) 是目前社区的发力方向，但它要求内核版本支持 <code>CONFIG_DEBUG_INFO_BTF=y</code> 特性。除了 REHL 等商业公司会回合高版本特性到当前支持的商业版本之外，大部分社区免费版本都要求 <strong>&gt;= 5.5</strong> 版本的内核。为了能在当前主流的 <strong>4.14, 4.15, 4.18, 4.19</strong> 内核版本上支持 eBPF CO-RE 特性， <a href="https://www.aquasec.com/">Aqua Security</a> 的工程师在 2021 Linux Plumbers Conference - <a href="https://lpc.events/event/11/contributions/948/">Towards truly portable eBPF</a> 议题上展示了它们的想法: BTF-Hub + Embedded BTF。</p>
+<h2 id="1-bpf-portable">1. BPF Portable</h2>
+<p>作为用户提供的程序片段，eBPF bytecode 可直接注入到 linux 内核里直接读取和操作内核运行态的内存数据，它的可观测性和对内核模块的可拓展性受到系统开发者的青睐。这是它强大的优势，但同时也是一大痛点：只有获得了目标内核版本的头文件才能保证 eBPF 程序能正确地访问内存数据。</p>
+<p>早期在使用 <a href="https://github.com/iovisor/bcc">bcc</a> 诊断工具时，我们需要 llvm/clang 做 eBPF 实时编译；如果开发 - 测试 - 线上环境没有做到版本的强一致，那么即使逃过了 BPF Verifier 的审判，程序也会因为没有正确地读取内存 (偏移地址不正确) 而出现非预期的行为。</p>
+<p><img src="/img/2022-ebpf-portable-with-btfhub/p1-shall-not-pass.svg" alt="shall-not-pass"></p>
+<p>虽然 eBPF 程序的非预期行为不会导致内核崩溃，但研发体验和内核模块开发差别不大：eBPF 开发者还是需要针对不同的内核版本编译出不同的版本，线上内核版本越多，测试上线的成本就越高。下图为 <a href="https://falco.org/">Falco</a> 为不同版本提供的内核模块；如果 eBPF 没有移植能力的话，它的发布模式其实和普通的内核模块差别不大。<strong>一次构建，到处运行</strong> 的能力直到 <a href="https://www.kernel.org/doc/html/latest/bpf/btf.html">BPF Type Format (BTF)</a> 的出现才有了质的飞跃。</p>
+<p><img src="/img/2022-ebpf-portable-with-btfhub/p2-falco-download-driver-ko-screenshoot.png" alt="falco-driver-ko"></p>
+<h3 id="11-btf">1.1 BTF</h3>
+<p>BTF 描述了程序所需要的数据结构信息，包括结构体大小名字，字段类型和偏移量等等。它一般通过 <a href="https://linux.die.net/man/1/pahole">pahole</a> 将 DWARF 调试信息转化得到，其压缩比非常高，一个常用内核的 BTF 仅需要 1-5 MB。正是因为它压缩比高、易携带，社区通过 <code>CONFIG_DEBUG_INFO_BTF=y</code> 编译选项来决定将其注入到 vmlinux 上，携带该信息的内核将通过 <code>/sys/kernel/btf/vmlinux</code> 路径作为外部获取的接口。</p>
+<p><img src="/img/2022-ebpf-portable-with-btfhub/p3-dwarf-btf.svg" alt="dwarf-vs-btf"></p>
+<p>BTF 同 DWARF 一样，我们可以根据 BTF 信息来生成了头文件。对于开发者而言，BTF 改善体验的第一件事就是仅需要一个头文件就可以拿到内核所使用的所有结构体描述。</p>
+<div class="highlight"><pre class="chroma"><code class="language-bash" data-lang="bash">$ bpftool btf dump file /sys/kernel/btf/vmlinux format c &gt; vmlinux.h
+</code></pre></div><p>但仅靠 BTF 还是无法保证 eBPF 程序能在目标内核上正确地获取内存地址，只能通过修正、校对现有指令才行。</p>
+<h3 id="12-preserve_access_index">1.2 preserve_access_index</h3>
+<p>以 Tracing 为例，eBPF 程序会经常使用进程元数据 <code>task_struct</code>，内核提供了 <code>bpf_get_current_task</code> 接口来获取当前上下文的进程信息，这个接口的返回值将直接指向内核运行态地址。从安全角度考虑，eBPF 访问内核空间的地址必须要走 <code>bpf_probe_read_kernel</code> 调用来完成。比如，我们想获取当前上下文的父进程 <code>pid</code>, 那么我们是无法直接通过 <code>task-&gt;real_parent-&gt;pid</code> 来读取；当前 <code>libbpf</code> 库为我们提供了 <code>BPF_PROBE_READ</code> 宏来读取父进程的 <code>pid</code>。</p>
+<p><img src="/img/2022-ebpf-portable-with-btfhub/p4-probe-read-bytecode.svg" alt="probe-read-bytecode"></p>
+<p><code>BPF_PROBE_READ</code> 宏展开后的编译结果显示两次 <code>task-&gt;real_parent</code>, <code>real_parent-&gt;pid</code> 读取，每次都是基于 <code>vmlinux_508.h</code> 头文件 (内核 v5.8) 的偏移量来读取。这和我本地的目标内核 (v5.13) 偏移量存在差异；即使程序不报错，它也不是按照预期来进行。为了解决这个问题，社区在编译器上做了优化。</p>
+<p><code>libbpf</code> 提供了新的宏 <code>BPF_CORE_READ</code>，它使用 <code>__builtin_preserve_access_index</code> 包住被读取的内核空间地址，比如 <code>task-&gt;real_parent</code>, <code>real_parent-&gt;pid</code>，那么在编译阶段会将访问路径 <code>0:57</code>，<code>0:54</code> 作为 relocation 的符号保存在 <code>.BTF.ext</code> section 里，其中 <code>57</code> 和 <code>54</code> 分别是 <code>real_parent</code> 和 <code>pid</code> 在 v5.8 内核 <code>task_struct</code> 结构体里的第 57 和 54 个字段。加载器会根据访问路径来比较源和当前内核对应数据结构的差异。当找到匹配对象后，那么将会以当前内核的偏移地址来修改原先的指令，保证程序可以正确运行；否则将会加载失败。</p>
+<p><img src="/img/2022-ebpf-portable-with-btfhub/p5-relo-access-str.svg" alt="relo-access-bytecode"></p>
+<p>早期 preserve_access_index 是配合 <code>BPF_CORE_READ</code> 来使用，现在直接将这个拓展放到每一个内核结构上，保证编译期间能注入 relocation 信息。当然这里仅仅列列出了 <code>field offset relocation</code>，还有 ENUM, BITFIELD 等模式，这些模式仅在结构匹配算法上存在差异，整体还都是先匹配再修改指令，在此就不再赘述。</p>
+<div class="highlight"><pre class="chroma"><code class="language-bash" data-lang="bash">$ cat vmlinux.h
+<span class="c1">#ifndef __VMLINUX_H__</span>
+<span class="c1">#define __VMLINUX_H__</span>
+
+<span class="c1">#ifndef BPF_NO_PRESERVE_ACCESS_INDEX</span>
+<span class="c1">#pragma clang attribute push (__attribute__((preserve_access_index)), apply_to = record)</span>
+<span class="c1">#endif</span>
+...
+</code></pre></div><p>eBPF 加载器在做指令修改时，它需要当前内核的 BTF 信息。一般来说，这个特性仅在 &gt;= v5.5 内核才支持，还有很多用户在使用 4.x 的内核。因可观测性的需求强行升级内核并不现实，我们需要寻求其他方式来获得 BTF 信息。</p>
+<h2 id="2-btf-hub-and-embeded-btf">2. BTF-Hub and embeded BTF</h2>
+<p>内核在编译时，它是通过 <code>pahole</code> 将 DWARD 信息转化成 BTF，并在 link-vmlinux 阶段将数据放到 BTF section 中。所以，即使是低内核版本，只要能拿到对应内核的编译调试信息，我们就可以独立转化并得到 BTF 信息，它和 <code>/sys/kernel/btf/vmlinux</code> 读出来的结果一致。eBPF 加载器是在用户态做指令改写，只要 eBPF 加载器能识别到指定的 BTF 信息即可。</p>
+<p><a href="https://lpc.events/event/11/contributions/948/">Towards truly portable eBPF</a> 议题提出了 <a href="https://github.com/aquasecurity/btfhub">BTF-Hub</a>：Aqua Security 工程师将 ubuntu/centos/federo/debian 对外开放的 DWARF 信息转化成对应的 BTF 信息，并配合加载器使用就可以完成 CO-RE 能力了。</p>
+<p><img src="/img/2022-ebpf-portable-with-btfhub/p6-customize-btf-path.svg" alt="customize-btf-path"></p>
+<p>这个方案解决了低内核版本不支持导出 BTF 的问题。虽然每一个内核版本 BTF 信息不大，但也抗不住小版本的迭代，就目前 BTF-Hub 提供 ubuntu 发行版的可用 BTF 信息就有 200 MB。在演讲者看来它和 falco 驱动的多内核版本构建差别不大，会场主持人也开玩笑说：&ldquo;如果 github 挂了，我们就获取不到 BTF 数据了&rdquo;。演讲者提出了比较有意思的想法: Embedded BTF。</p>
+<p>Embeded BTF 核心设计就是去除无用的 BTF 信息。举个例子， bcc 提供了 libbpf-tools 38 个 eBPF 程序，但这些程序使用的内核数据结构只是内核 BTF 信息的子集，只要能获取出这个子集就能降低携带 BTF 信息成本，这个提取的方案叫做 <a href="https://lore.kernel.org/bpf/20220215225856.671072-1-mauricio@kinvolk.io/">BTFGen</a>，已经被 Linux bpf-next 所接受了。下面可以看下我本地使用的效果：</p>
+<p><img src="/img/2022-ebpf-portable-with-btfhub/p7-min-core-gen.svg" alt="min-core-gen"></p>
+<p><code>4.9MB</code> 里只有 <code>3.3KB</code> 数据有用，对于一类 eBPF 程序而言，即使把尽可能多内核版本的 BTF 随身携带也不会带来存储空间压力；当线上内核版本较为统一时，开发者甚至还可以将 BTF 信息放入到容器镜像或者应用程序的二进制里。</p>
+<p>对我而言，这个方案的确是让低版本的内核享受到 CO-RE 的好处，<a href="https://github.com/iovisor/bcc/pull/3889">甚至会改变 bcc 工具包的发布方式</a>。</p>
+<h2 id="3-summary">3. Summary</h2>
+<p>除了 BTF-Hub 和 Embedded BTF 之外，演讲者还介绍了很多他们遇到的 CO-RE 挑战，实战编程中还是有一定的参考意义，值得一看。</p>
+
+            </article>
+        </div>
+
+        <footer>
+    &copy; 2022 Fu Wei
+</footer>
+
+<script>
+    function doPrettify(){
+        pres=document.getElementsByTagName('pre');
+        for (i=0; i < pres.length; i++) {
+            pres[i].className+=" prettyprint";
+        }
+        prettyPrint();
+    }
+</script>
+
+
+<script async src="https://www.googletagmanager.com/gtag/js?id=G-1C7VLVHN52"></script>
+<script>
+  window.dataLayer = window.dataLayer || [];
+  function gtag(){dataLayer.push(arguments);}
+  gtag('js', new Date());
+
+  gtag('config', 'G-1C7VLVHN52');
+</script>
+
+    </body>
+</html>
