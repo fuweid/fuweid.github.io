@@ -41,7 +41,7 @@
 &lt;span class=&#34;c1&#34;&gt;#endif&lt;/span&gt;
 ...
 &lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;p&gt;eBPF 加载器在做指令修改时，它需要当前内核的 BTF 信息。一般来说，这个特性仅在 &amp;gt;= v5.5 内核才支持，还有很多用户在使用 4.x 的内核。因可观测性的需求强行升级内核并不现实，我们需要寻求其他方式来获得 BTF 信息。&lt;/p&gt;
-&lt;h2 id=&#34;2-btf-hub-and-embeded-btf&#34;&gt;2. BTF-Hub and embeded BTF&lt;/h2&gt;
+&lt;h2 id=&#34;2-btf-hub-and-embedded-btf&#34;&gt;2. BTF-Hub and embedded BTF&lt;/h2&gt;
 &lt;p&gt;内核在编译时，它是通过 &lt;code&gt;pahole&lt;/code&gt; 将 DWARD 信息转化成 BTF，并在 link-vmlinux 阶段将数据放到 BTF section 中。所以，即使是低内核版本，只要能拿到对应内核的编译调试信息，我们就可以独立转化并得到 BTF 信息，它和 &lt;code&gt;/sys/kernel/btf/vmlinux&lt;/code&gt; 读出来的结果一致。eBPF 加载器是在用户态做指令改写，只要 eBPF 加载器能识别到指定的 BTF 信息即可。&lt;/p&gt;
 &lt;p&gt;&lt;a href=&#34;https://lpc.events/event/11/contributions/948/&#34;&gt;Towards truly portable eBPF&lt;/a&gt; 议题提出了 &lt;a href=&#34;https://github.com/aquasecurity/btfhub&#34;&gt;BTF-Hub&lt;/a&gt;：Aqua Security 工程师将 ubuntu/centos/federo/debian 对外开放的 DWARF 信息转化成对应的 BTF 信息，并配合加载器使用就可以完成 CO-RE 能力了。&lt;/p&gt;
 &lt;p&gt;&lt;img src=&#34;https://fuweid.com/img/2022-ebpf-portable-with-btfhub/p6-customize-btf-path.svg&#34; alt=&#34;customize-btf-path&#34;&gt;&lt;/p&gt;
