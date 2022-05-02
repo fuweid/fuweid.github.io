@@ -5,10 +5,24 @@
     <link>https://fuweid.com/post/</link>
     <description>Recent content in Posts on FuWei</description>
     <generator>Hugo -- gohugo.io</generator>
-    <lastBuildDate>Thu, 10 Mar 2022 00:00:45 +0800</lastBuildDate>
+    <lastBuildDate>Mon, 02 May 2022 18:20:45 +0800</lastBuildDate>
     
 	<atom:link href="https://fuweid.com/post/index.xml" rel="self" type="application/rss+xml" />
     
+    
+    <item>
+      <title>embedshim: 内核是我的边车</title>
+      <link>https://fuweid.com/post/2022-embedshim-kernel-is-my-sidecar/</link>
+      <pubDate>Mon, 02 May 2022 18:20:45 +0800</pubDate>
+      
+      <guid>https://fuweid.com/post/2022-embedshim-kernel-is-my-sidecar/</guid>
+      <description>在 2019 年的时候，当时所在的团队正在开始大规模使用 containerD，我们初期遇到较多 containerd-shim 的死锁等稳定性问题，我们不得不去思考去除 containerd-shim 进程的可能性。由于当时技术选型上的限制，containerd-shim 必须作为容器 subreaper 而存在。直到去年才留意到 pidfd pollable，我才发现 containerd-shim 管控面其实是可以被移除。我顺着这个思路作出了 embedshim 这个 containerD 第三方插件。在介绍这个插件之前，我们先简单回顾下 containerd-shim 的发展历程。
+1. 从 docker 的原地升级到 containerd-shim 1.1 原地升级的需求 最初 dockerd 的容器进程管理是非常简单粗暴的，它采用了 Fork-and-Wait 模式来监控容器状态，并通过无名管道接管容器的标准输入输出。如果 dockerd 进程重启，那么它将无法重新监控容器的状态变化，而这些已运行的容器都将变成 孤儿。为了防止资源残留，dockerd 重启后的第一件事就是停掉正在运行的容器。然而节点组件的重启和周期性升级都属于正常操作，dockerd 停服重启应保证正在运行的容器不受影响。
+这 docker#2658 帖子记录了当时 dockerd 原地升级的细节讨论；当然除了方案讨论外，用户对该需求落地呼声评论是更强烈些的。组件进程重启涉及到的细节比较多，但可以归类为状态恢复以及临时（残留）数据的清理，比如有讨论清理未完成的网络初始化资源，有讨论如何恢复接管容器的标准输出，还有讨论如何做镜像下载的断点续下等等。而对于本文的主题 - 如何重新接管存量容器进程的场景而言，个人认为仅需要考虑下面两个问题即可：
+ 如何保证容器退出事件不丢失？ 如何重新接管容器的标准输入输出？  首先，我们来看第一个问题。进程退出码能正确反映一个进程是以什么状态结束的，有正常退出的，有收到 SIGTERM 信号优雅停服的，还有因无法分配新的内存而被内核 SIGKILL 的。开发者和运维人员可以根据进程退出码以及关键日志信息来做 非预期退出事件 的诊断，所以对于进程管理方案而言，进程退出码必须要能被正确捕获，而当时最稳妥的方式是有一个常驻进程来做容器进程的 subreaper。
+相比于第一个问题，第二个问题处理起来要简单些。经历过早期节点运维的朋友都知道，在容器化之前呢，大部分业务进程的管理是通过 systemd-service 来实现。业务进程直接被一号进程所监管，同时它们采用了 Headless 无界面无交互的方式运行。它们的标准输出通常以 UDS 流的形式传递给 systemd-journald 服务，由 systemd-journald 来做日志持久化和轮动存储。
+容器化后的节点运维比 systemd 模式要稍微复杂些。容器化产生了根路经和资源视图隔离，容器管理面需要封装 nsenter 和 chroot/pivot 等系统调用来提供便捷的运维通道。dockerd 进程提供了 execCreate/execStart/execAttach HTTP 接口来进入到容器隔离视图，这种具有交互能力的运维通道必定会感知 dockerd 停服。但个人认为这种感知是可接受的，只要能保证容器标准输出不因 dockerd 停服而丢失即可。在标准输入输出的接管上，dockerd 并没有采用 UDS 流模式，而是采用有名管道的方式。</description>
+    </item>
     
     <item>
       <title>Towards truly portable eBPF</title>
