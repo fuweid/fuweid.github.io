@@ -5,10 +5,23 @@
     <link>https://fuweid.com/post/</link>
     <description>Recent content in Posts on FuWei</description>
     <generator>Hugo -- gohugo.io</generator>
-    <lastBuildDate>Mon, 02 May 2022 18:20:45 +0800</lastBuildDate>
+    <lastBuildDate>Sun, 12 Jun 2022 12:00:53 +0800</lastBuildDate>
     
 	<atom:link href="https://fuweid.com/post/index.xml" rel="self" type="application/rss+xml" />
     
+    
+    <item>
+      <title>eBPF 动态观测之指令跳板</title>
+      <link>https://fuweid.com/post/2022-bpf-kprobe-fentry-poke/</link>
+      <pubDate>Sun, 12 Jun 2022 12:00:53 +0800</pubDate>
+      
+      <guid>https://fuweid.com/post/2022-bpf-kprobe-fentry-poke/</guid>
+      <description>在 containerd 自定义插件 embedshim 项目里，我借助了 Linux 内核里的 trace_sched_process_exit 观测能力，并利用 eBPF Map 记录和持久化容器进程退出事件。 这类观测能力依赖内核在关键代码路径上提前定义好钩子，它属于静态观测技术，任何变化都需要重新编译 Linux 内核。 如果我们想观测内核中的某一个关键函数或者某一行关键代码时，我们可以选择 kprobe 或者 ftrace 这类动态观测技术。
+kprobe - single-step Kernel Probe(kprobe) 是一个轻量级内核指令观测的技术，用户可以指定观测内核的某一个函数，甚至可以观测函数内的某一条指令，除了 kprobe 框架自身的代码以及异常处理函数外，用户几乎可以观测内核运行的每一条指令。
+当 CPU 执行到被观测指令时，也就是产生了一次 观测事件，那么 kprobe 会把当前 CPU 的寄存器信息作为输入去执行用户注册的观测程序。 然而被观测的指令由用户随机指定，考虑到性能问题，kprobe 无法在编译内核时为每一条指令预留埋点，同时我们很难在编译好的程序里动态插入指令。 基于性能和稳定性考虑，kprobe 选择了 单步调试 的通用方案。
+在介绍 kprobe 方案之前，我们先简单回顾下 gdb 调试过程。为了调试某一行代码，我们先通过 breakpoint 给该行打上断点，当程序运行到该行代码时就会停下来，等待我们的下一步交互。 这个时候我们就可以通过 p 或者 info 等命令来查看当前程序的状态，甚至我们还可以通过 单步调试 来观察程序每条指令带来的变化。 我们利用断点和单步调试产生的 停顿 来观测程序，这本质上也是一种埋点，内核也正是通过这种方式来实现 kprobe，如下图所示。
+x86_64 CPU 架构下的断点指令为 INT3，它是一个单字节指令 0xcc 。我们可以用 INT3 来替换任何指令的 opcode，被替换的指令（以及后续指令）都将被中断所短路掉，而 CPU 将进入 do_int3 [1] 中断处理逻辑。</description>
+    </item>
     
     <item>
       <title>embedshim: 内核是我的边车</title>
