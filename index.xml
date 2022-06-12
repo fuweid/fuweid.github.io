@@ -3,9 +3,105 @@
         <title>FuWei</title>
         <link>https://fuweid.com/</link>
         <copyright>2022 Wei Fu</copyright>
-        <lastBuildDate>Mon, 02 May 2022 18:20:45 +0800</lastBuildDate>
+        <lastBuildDate>Sun, 12 Jun 2022 12:00:53 +0800</lastBuildDate>
         <atom:link href="/" rel="self" type="application/rss+xml" />
 
+        
+        <item>
+          <title>eBPF 动态观测之指令跳板</title>
+          <link>/post/2022-bpf-kprobe-fentry-poke/</link>
+          <pubDate>Sun, 12 Jun 2022 12:00:53 +0800</pubDate>
+          <guid>https://fuweid.com/post/2022-bpf-kprobe-fentry-poke/</guid>
+          <description>&lt;p&gt;在 containerd 自定义插件 embedshim 项目里，我借助了 Linux 内核里的 trace_sched_process_exit 观测能力，并利用 eBPF Map 记录和持久化容器进程退出事件。
+这类观测能力依赖内核在关键代码路径上提前定义好钩子，它属于静态观测技术，任何变化都需要重新编译 Linux 内核。
+如果我们想观测内核中的某一个关键函数或者某一行关键代码时，我们可以选择 kprobe 或者 ftrace 这类动态观测技术。&lt;/p&gt;
+&lt;h2 id=&#34;kprobe---single-step&#34;&gt;kprobe - single-step&lt;/h2&gt;
+&lt;p&gt;Kernel Probe(kprobe) 是一个轻量级内核指令观测的技术，用户可以指定观测内核的某一个函数，甚至可以观测函数内的某一条指令，除了 kprobe 框架自身的代码以及异常处理函数外，用户几乎可以观测内核运行的每一条指令。&lt;/p&gt;
+&lt;p&gt;当 CPU 执行到被观测指令时，也就是产生了一次 &lt;strong&gt;观测事件&lt;/strong&gt;，那么 kprobe 会把当前 CPU 的寄存器信息作为输入去执行用户注册的观测程序。
+然而被观测的指令由用户随机指定，考虑到性能问题，kprobe 无法在编译内核时为每一条指令预留埋点，同时我们很难在编译好的程序里动态插入指令。
+基于性能和稳定性考虑，kprobe 选择了 &lt;strong&gt;单步调试&lt;/strong&gt; 的通用方案。&lt;/p&gt;
+&lt;p&gt;在介绍 kprobe 方案之前，我们先简单回顾下 gdb 调试过程。为了调试某一行代码，我们先通过 &lt;code&gt;breakpoint&lt;/code&gt; 给该行打上断点，当程序运行到该行代码时就会停下来，等待我们的下一步交互。
+这个时候我们就可以通过 &lt;code&gt;p&lt;/code&gt; 或者 &lt;code&gt;info&lt;/code&gt; 等命令来查看当前程序的状态，甚至我们还可以通过 &lt;strong&gt;单步调试&lt;/strong&gt; 来观察程序每条指令带来的变化。
+我们利用断点和单步调试产生的 &lt;strong&gt;停顿&lt;/strong&gt; 来观测程序，这本质上也是一种埋点，内核也正是通过这种方式来实现 kprobe，如下图所示。&lt;/p&gt;
+&lt;p&gt;&lt;img src=&#34;https://fuweid.com/img/2022-ebpf-kprobe-fentry-poke/kprobe-single-step.svg&#34; alt=&#34;&#34;&gt;&lt;/p&gt;
+&lt;p&gt;x86_64 CPU 架构下的断点指令为 INT3，它是一个单字节指令 &lt;code&gt;0xcc&lt;/code&gt; 。我们可以用 INT3 来替换任何指令的 opcode，被替换的指令（以及后续指令）都将被中断所短路掉，而 CPU 将进入 do_int3 [&lt;a href=&#34;https://elixir.bootlin.com/linux/v4.19/source/arch/x86/kernel/traps.c#L581&#34;&gt;1&lt;/a&gt;] 中断处理逻辑。&lt;/p&gt;
+&lt;p&gt;如上图所示，kprobe 观测的是 &lt;code&gt;Near CALL wq_worker_running&lt;/code&gt; 指令。在观测之前，kprobe 申请新的空间 &lt;code&gt;copy-ip-addr&lt;/code&gt; 来存储被观测指令的内容 &lt;code&gt;e8 fc 57 77 ff&lt;/code&gt;，然后调用 &lt;code&gt;arch_arm_kprobe/text_poke&lt;/code&gt; [&lt;a href=&#34;https://elixir.bootlin.com/linux/v4.19/source/arch/x86/kernel/kprobes/core.c#L500&#34;&gt;2&lt;/a&gt;] 将 &lt;code&gt;Near CALL 0xe8&lt;/code&gt; 替换成 &lt;code&gt;INT3 0xcc&lt;/code&gt;。打完断点后，一旦有 CPU 执行到这条指令上，那 CPU 必然会进入到 INT3 中断处理逻辑里的 &lt;code&gt;do_int3/kprobe_int3_handler&lt;/code&gt; [&lt;a href=&#34;https://elixir.bootlin.com/linux/v4.19/source/arch/x86/kernel/kprobes/core.c#L655&#34;&gt;3&lt;/a&gt;]。&lt;/p&gt;
+&lt;p&gt;在 &lt;code&gt;kprobe_int3_handler&lt;/code&gt; 中断逻辑里，kprobe 首先会标记当前 CPU 为 &lt;code&gt;KPROBE_HIT_ACTIVE&lt;/code&gt; 状态，表明该 CPU 正在处理 kprobe 的观测事件。
+而通过内核模块或者 eBPF 系统调用注册的观测程序，它们都被聚合到 &lt;code&gt;pre_handler&lt;/code&gt; 钩子函数内，&lt;code&gt;kprobe_int3_handler&lt;/code&gt; 会先执行这些观测程序，再去运行观测的指令。&lt;/p&gt;
+&lt;p&gt;在执行被观测的指令时，内核并不会将 &lt;code&gt;INT3&lt;/code&gt; 还原成 &lt;code&gt;Near CALL&lt;/code&gt;，毕竟还会有其他 CPU 可能会触发该指令的观测事件，因此该 CPU 需要跳到 &lt;code&gt;copy-ip-addr&lt;/code&gt; 指令地址上运行原先的指令。
+&lt;code&gt;copy-ip-addr&lt;/code&gt; 仅保存一条指令，&lt;code&gt;Near CALL&lt;/code&gt; 返回的指令地址依然在原先指令 &lt;code&gt;orig-ip-addr&lt;/code&gt; 地址之后；加上 &lt;code&gt;Near CALL&lt;/code&gt; 返回指令地址以及下一条指令地址的计算都是基于当前指令地址计算出来的，该 CPU 需要一个修正指令地址和返回指令地址的机会，而这个机会由 &lt;strong&gt;单步调试&lt;/strong&gt; 所产生的中断来提供。&lt;/p&gt;
+&lt;p&gt;首先 kprobe 会将 CPU 状态切换成 &lt;code&gt;KPROBE_HIT_SS&lt;/code&gt;，表明 CPU 正在准备单步调试状态。内核会将寄存器中的 EIP 指向 &lt;code&gt;copy-ip-addr&lt;/code&gt;，并配置 &lt;code&gt;X86_EFLAGS_TF&lt;/code&gt; 标记，这个标记会让 CPU 执行完一条指令后产生调试中断，保证 CPU 会进入 &lt;code&gt;do_debug/kprobe_debug_handler&lt;/code&gt; [&lt;a href=&#34;https://elixir.bootlin.com/linux/v4.19/source/arch/x86/kernel/kprobes/core.c#L936&#34;&gt;4&lt;/a&gt;] 中断函数。当进入 &lt;code&gt;kprobe_debug_handler&lt;/code&gt; 中断处理后，CPU 的下一条执行指令地址变成了 &lt;code&gt;copy-ip-addr + 5 + fc 57 77 ff&lt;/code&gt;，其中 &lt;code&gt;copy-ip-addr + 5&lt;/code&gt; 表示 &lt;code&gt;copy-ip-addr&lt;/code&gt; 的下一条指令地址，因为这个 Near CALL 是五字节指令，而 &lt;code&gt;fc 57 77 ff&lt;/code&gt; 表示指令之间的距离。但 &lt;code&gt;fc 57 77 ff&lt;/code&gt; 是由 &lt;code&gt;orig-ip-addr + 5&lt;/code&gt; 和 &lt;code&gt;wq_worker_running&lt;/code&gt; 计算出来的，因此我们需要将其修正成正确的 &lt;code&gt;wq_worker_running&lt;/code&gt; 的位置。同理，函数栈里的返回地址也需要更正: &lt;code&gt;return-eip&lt;/code&gt; - &lt;code&gt;copy-ip-addr&lt;/code&gt; 可获取被观测指令的长度，仅需要将指令长度加到 &lt;code&gt;orig-ip-addr&lt;/code&gt; 就可以拿到真正的返回指令地址了。
+之后 kprobe 将移除 &lt;code&gt;X86_EFFLAGS_TF&lt;/code&gt; 标记，取消单步调试状态，并更成 CPU 成 &lt;code&gt;KPROBE_HIT_SSDONE&lt;/code&gt; 状态，表明单步调试结束。&lt;/p&gt;
+&lt;blockquote&gt;
+&lt;p&gt;NOTE: KPROBE_HIT_XYZ 状态是用来记录当前 kprobe 运行状态。用户自定义程序可能会调用到一个被 kprobe 观测的指令上了，因此在执行 &lt;code&gt;pre/post_handler&lt;/code&gt; 时会再次触发 INT3 中断。而 per-CPU 的 kprobe 状态记录可以用来判断当前 INT3 触发是第一次触发 KPROBE_HIT_ACTIVE 还是再次触发 KPROBE_HIT_REENTER。目前 kprobe 仅允许发生一次 KPROBE_HIT_REENTER。&lt;/p&gt;
+&lt;/blockquote&gt;
+&lt;p&gt;虽然单步执行模式可以让用户观测任何指令，但每条指令都要产生两次中断；如果观测在关键的代码路径上，这种模式势必会影响到内核的性能。
+kprobe 针对两次中断共有两个优化方案，我们先来看看 2021 年初的一个优化方案。&lt;/p&gt;
+&lt;h2 id=&#34;kprobe---x86-insn-emulation&#34;&gt;kprobe - x86 Insn Emulation&lt;/h2&gt;
+&lt;p&gt;2021 年优化提交名叫 &lt;code&gt;x86/kprobes: Use int3 instead of debug trap for single-step&lt;/code&gt; [&lt;a href=&#34;https://lore.kernel.org/all/161469874601.49483.11985325887166921076.stgit@devnote2/T/#mbb8fd3431b354681310a12741adfd57fad0e7d95&#34;&gt;5&lt;/a&gt;]，它是通过离线模拟被观测指令来去除单步调试中断，如下图所示。&lt;/p&gt;
+&lt;p&gt;&lt;img src=&#34;https://fuweid.com/img/2022-ebpf-kprobe-fentry-poke/kprobe-emulate-execute-out-of-line.svg&#34; alt=&#34;&#34;&gt;&lt;/p&gt;
+&lt;p&gt;我们还是使用 &lt;code&gt;Near CALL&lt;/code&gt; 指令的例子来解释。根据 x86_64 IA-32 架构开发文档对 &lt;code&gt;Near CALL&lt;/code&gt; 的描述，我们可以将用两条指令来模拟它：&lt;/p&gt;
+&lt;ul&gt;
+&lt;li&gt;将 &lt;code&gt;Near CALL&lt;/code&gt; 的下一条指令 &lt;code&gt;next-ip-addr&lt;/code&gt; 地址压入栈，作为函数返回的 &lt;code&gt;return-eip&lt;/code&gt;&lt;/li&gt;
+&lt;li&gt;通过 &lt;code&gt;next-ip-addr&lt;/code&gt; 计算出来的指令地址可以直接用 &lt;code&gt;Near JMP&lt;/code&gt; 指令跳过去&lt;/li&gt;
+&lt;/ul&gt;
+&lt;p&gt;换言之，&lt;code&gt;Near CALL&lt;/code&gt; 指令产生的结果完全可以在 &lt;code&gt;do_int3/kprobe_int3_handler&lt;/code&gt; 中断处理中离线模拟出来。
+在上文提到的单步调试里，&lt;code&gt;do_debug/kprobe_debug_handler&lt;/code&gt; 调试中断处理需要通过 &lt;code&gt;resume_execution&lt;/code&gt; [&lt;a href=&#34;https://elixir.bootlin.com/linux/v4.19/source/arch/x86/kernel/kprobes/core.c#L869&#34;&gt;6&lt;/a&gt;] 里面修正 CPU 的寄存器信息，在我看来，这本质上和模拟没有区别。
+所以这个方案通过模拟指令的方式来移除了不必要的单步调试中断，这对性能有极大的提升。不过需要说明的是，该方案并非支持所有指令的模拟，根据邮件里的讨论来看，&lt;code&gt;prepare_emulation&lt;/code&gt; [&lt;a href=&#34;https://elixir.bootlin.com/linux/v5.18/source/arch/x86/kernel/kprobes/core.c#L584&#34;&gt;7&lt;/a&gt;] 模拟的指令足以覆盖大部分场景。&lt;/p&gt;
+&lt;p&gt;指令模拟优化掉了单步调试中断，但每次观测指令达到时，kprobe 还是会触发 INT3 中断，对关键代码执行路径还是存在影响。&lt;/p&gt;
+&lt;h2 id=&#34;kprobe---detour-buffer&#34;&gt;kprobe - detour buffer&lt;/h2&gt;
+&lt;p&gt;Linux 内核社区在 2009 年提出了 kprobe jump optimization [&lt;a href=&#34;https://lwn.net/Articles/365833/&#34;&gt;8&lt;/a&gt;] 方案，该方案的思路是通过 &lt;code&gt;Near JMP&lt;/code&gt; 指令来模拟 &lt;code&gt;do_int3/kprobe_int3_handler&lt;/code&gt; 中断处理。
+该方案在各大发行版里目前默认开启，在当时的优化结果比单步调试快了近 10 倍。虽然它存在一定的局限性，但不妨碍我们了解它，这个方案和后面提到的 ftrace 设计理念一致。&lt;/p&gt;
+&lt;p&gt;该优化方案通过修改被观测指令成 &lt;code&gt;Near JMP&lt;/code&gt; 指令，一旦产生观测事件，CPU 将跳到预定义好的一个代码片段上模拟 &lt;code&gt;kprobe_int3_handler&lt;/code&gt; 处理逻辑。
+但 &lt;code&gt;Near JMP (Rel32)&lt;/code&gt; 是一个 &lt;strong&gt;五字节&lt;/strong&gt; 的指令，如果在指令更新过程中，中间结果被其他 CPU 读取执行了，那么将产生不可预知的行为，这甚至会造成内核崩溃。
+为了保证能安全更新被观测指令，kprobe 还是需要依赖 INT3 中断来协助处理指令更新。&lt;/p&gt;
+&lt;p&gt;假设我们已经有了模拟 kprobe_int3_handler 的代码片段，为了方便解释，我们将其简称为 &lt;strong&gt;跳板&lt;/strong&gt; （虽然方案和文档都称之为 detour buffer，但我觉得 跳板 更容易理解些）。
+在这里，我们继续拿之前 &lt;code&gt;Near CALL&lt;/code&gt; 的观测指令来举例子。被观测指令 &lt;code&gt;e8 fc 57 77 ff&lt;/code&gt; 被 kprobe 更新成 &lt;code&gt;INT3[cc] fc 57 77 ff&lt;/code&gt;; 那么任何时刻 CPU 执行这条指令时，它们都会触发 INT3 中断，即使 &lt;code&gt;fc 57 77 ff&lt;/code&gt; 这个值被改成非法的值，CPU 也不会使用这个值，INT3 给我们形成了天然的屏障，如下图所示。&lt;/p&gt;
+&lt;p&gt;&lt;img src=&#34;https://fuweid.com/img/2022-ebpf-kprobe-fentry-poke/kprobe-poke-update-with-int3.svg&#34; alt=&#34;&#34;&gt;&lt;/p&gt;
+&lt;p&gt;kprobe jump 优化方案是一个异步的操作，该方案会触发一个 kworker [&lt;a href=&#34;https://elixir.bootlin.com/linux/v5.18/source/kernel/kprobes.c#L515&#34;&gt;9&lt;/a&gt;] 来执行被观测指令的更新。那么在指令更新前，CPU 还是可以会触发观测事件，这个时候的处理链路还是会走到 &lt;code&gt;kprobe_int3_handler/setup_singlestep&lt;/code&gt; [&lt;a href=&#34;https://elixir.bootlin.com/linux/v5.18/source/arch/x86/kernel/kprobes/core.c#L833&#34;&gt;10&lt;/a&gt;]。但它并非使用前面提到的指令模拟，而是直接通过 &lt;code&gt;setup_detour_execution&lt;/code&gt; [&lt;a href=&#34;https://elixir.bootlin.com/linux/v5.18/source/arch/x86/kernel/kprobes/opt.c#L560&#34;&gt;11&lt;/a&gt;] 将寄存器的 EIP 转化成 &lt;strong&gt;跳板&lt;/strong&gt; 代码指令地址上，相当于模拟了一次更新后的 &lt;code&gt;Near JMP&lt;/code&gt; 指令。如果 kworker 开始调用 &lt;code&gt;text_poke_bp&lt;/code&gt; [&lt;a href=&#34;https://elixir.bootlin.com/linux/v5.18/source/arch/x86/kernel/alternative.c#L1578&#34;&gt;12&lt;/a&gt;] ，那么内核会告知所有 CPU，有一个 CPU 当前正在处理指令升级。如果其他 CPU 触发了该指令的 INT3 中断，那么 CPU 将会进入到 &lt;code&gt;poke_int3_handler&lt;/code&gt; [&lt;a href=&#34;https://elixir.bootlin.com/linux/v5.18/source/arch/x86/kernel/alternative.c#L1240&#34;&gt;13&lt;/a&gt;] 中断处理逻辑，同样的它会根据指令来调用不同的模拟逻辑：在 kprobe 指令优化场景下，&lt;code&gt;poke_int3_handler&lt;/code&gt; 将会调用 &lt;code&gt;int3_emulate_jmp&lt;/code&gt; 模拟逻辑，效果和前面提到的 &lt;code&gt;setup_detour_execution&lt;/code&gt; 一致。那么有了 INT3 中断这一屏障后，&lt;code&gt;text_poke_bp&lt;/code&gt; 就可以放心更新指令了，其中 &lt;code&gt;text_poke_bp&lt;/code&gt; 更新有三步：&lt;/p&gt;
+&lt;ol&gt;
+&lt;li&gt;指令首地址 opcode 更新成 INT3，确保 &lt;code&gt;poke_int3_handler&lt;/code&gt; 能模拟预期的行为；&lt;/li&gt;
+&lt;li&gt;将指令后半部分更新成预期的值;&lt;/li&gt;
+&lt;li&gt;将指令的首地址 opcode 更新成预期的值。&lt;/li&gt;
+&lt;/ol&gt;
+&lt;p&gt;&lt;code&gt;text_poke_bp&lt;/code&gt; 每一步更新都会同步给所有 CPU，确保它们读到的都是最新的指令内容。&lt;/p&gt;
+&lt;p&gt;&lt;img src=&#34;https://fuweid.com/img/2022-ebpf-kprobe-fentry-poke/kprobe-jmp-detour-buffer.svg&#34; alt=&#34;&#34;&gt;&lt;/p&gt;
+&lt;p&gt;在 kprobe 场景下，最终被观测指令将会变成跳到 &lt;strong&gt;跳板&lt;/strong&gt; 的指令，而这跳板里的指令内容如上图所示。
+跳板上的指令由 &lt;code&gt;arch_prepare_optimized_kprobe&lt;/code&gt; [&lt;a href=&#34;https://elixir.bootlin.com/linux/v5.18/source/arch/x86/kernel/kprobes/opt.c#L411&#34;&gt;14&lt;/a&gt;] 代码生成，其中 &lt;code&gt;optimized_callback&lt;/code&gt; [&lt;a href=&#34;https://elixir.bootlin.com/linux/v5.18/source/arch/x86/kernel/kprobes/opt.c#L176&#34;&gt;15&lt;/a&gt;] 用来执行 kprobe 的 &lt;code&gt;pre_handler&lt;/code&gt;。
+跳板指令最后为被观测指令的 &lt;strong&gt;副本&lt;/strong&gt; 以及跳回到被观测指令的下一指令，其中这个副本并非直接拷贝原来的指令。
+对于 &lt;code&gt;Near CALL&lt;/code&gt; 或者 &lt;code&gt;Near JMP&lt;/code&gt; 等具有相对位置的指令，我们需要根据当前跳板和被观测指令之间的差值来更新指令，这样才可以确保被观测指令可以离线运行，原理和单步调试里的 &lt;code&gt;resume_execution&lt;/code&gt; 类似。&lt;/p&gt;
+&lt;p&gt;这个优化效果十分显著，但它对被观测指令有一定的要求。在前面我举的例子里，被观测指令的长度和 &lt;code&gt;Near JMP&lt;/code&gt; 指令长度一致，所以被修改的指令仅一条。
+但在 x86_64 架构里，指令长度是变长编码，常用的指令编码需要的字节少，而不常用的字节多。如果被观测的指令短于五字节，那么指令修改必定涉及到多条。
+而 &lt;code&gt;text_poke_bp&lt;/code&gt; 更新的指令如果跨越了多个指令，那么 INT3 中断将无法保证中间修改的状态不被访问。假设某一条指令可以跳过 INT3 指令访问正在修改的值，
+那么 CPU 执行时必然会出现不可预知的情况。因此 kprobe 会通过 &lt;code&gt;can_optimize&lt;/code&gt; [&lt;a href=&#34;https://elixir.bootlin.com/linux/v5.18/source/arch/x86/kernel/kprobes/opt.c#L296&#34;&gt;16&lt;/a&gt;] 来扫描被观测指令所在函数的每一条指令，以确保可使用跳板模式来优化。&lt;/p&gt;
+&lt;p&gt;总的来说，这个优化方案要求被观测指令不能涉及到异常处理、不能出现跳跃到被修改指令的中间位置以及被观测指令是可以脱离原上下文离线运行的。
+有一定的局限性，但如果我们想要观测某一个函数入口时，我们还是可以使用上这个优化。&lt;/p&gt;
+&lt;h2 id=&#34;kretprobe--kprobe--rethook&#34;&gt;kretprobe = kprobe + rethook&lt;/h2&gt;
+&lt;p&gt;kretprobe 提供了观测函数返回时刻 CPU 上下文的能力。&lt;/p&gt;
+&lt;p&gt;以常用的 &lt;code&gt;Near CALL&lt;/code&gt; 为例，我们先回顾下 x86_64 下的函数调用和返回的指令：在函数调用时，CPU 会将返回的指令地址压入栈顶，再执行函数入口处的指令; 当函数返回 (&lt;code&gt;RET&lt;/code&gt; 指令） 时，CPU 会将栈顶的返回指令地址更新到 EIP 寄存器上，这样 CPU 就可以按照原来的分支继续执行。从出栈入栈的角度看，个人能想到观测函数返回的上下文总有两种方式：&lt;/p&gt;
+&lt;ul&gt;
+&lt;li&gt;在函数入口处修改返回指令地址，当函数返回时，CPU 就能到我们指定的指令地址上运行，从而完成观测事件的处理；&lt;/li&gt;
+&lt;li&gt;使用 kprobe 观测函数的返回指令。&lt;/li&gt;
+&lt;/ul&gt;
+&lt;p&gt;第二个方案有一个明显的弊端，注册 kretprobe 的时候需要扫描整个函数的指令。一般函数入口的第一条指令都是可以优化成 &lt;code&gt;Near JMP&lt;/code&gt; 指令，无需 INT3 中断。基于这样的假设，kretprobe 选择第一种方式会比较合适，如下图所示（为了方便解释，我使用 x86 kprobe 离线模拟指令的方式来说明）。&lt;/p&gt;
+&lt;p&gt;&lt;img src=&#34;https://fuweid.com/img/2022-ebpf-kprobe-fentry-poke/kretprobe-with-emulate-kprobe.svg&#34; alt=&#34;&#34;&gt;&lt;/p&gt;
+&lt;p&gt;首先 kretprobe 会注册一个 kprobe 到函数入口处。这个 kprobe 用来记录当前线程 &lt;code&gt;current&lt;/code&gt; 的栈帧 EBP 以及真实返回指令地址 Return-EIP，并修改返回指令地址成 &lt;code&gt;arch_rethook_trampoline&lt;/code&gt; 函数。被观测的函数可能没有返回值，也可能递归调用多次，kretprobe 并不会无限制地调用申请 &lt;code&gt;rethook node&lt;/code&gt; 来存储上下文，因此用户需要通过配置 &lt;code&gt;maxactive&lt;/code&gt; 来决定可以同时处理返回。&lt;/p&gt;
+&lt;p&gt;在保存 &lt;code&gt;rethook node&lt;/code&gt; 信息时，kretprobe 采用入栈的形式保存数据。举一个例子，假设 &lt;code&gt;schedule&lt;/code&gt; 函数调用了 &lt;code&gt;wq_worker_running&lt;/code&gt; 函数，同时它两都属于 kretprobe 的观测对象。当一个线程调用了 &lt;code&gt;schedule&lt;/code&gt; 函数，也走到了 &lt;code&gt;schedule&lt;/code&gt; 函数内的 &lt;code&gt;wq_worker_running&lt;/code&gt; 函数，那么 kretprobe 在处理返回事件时，第一个处理的应该是 &lt;code&gt;wq_worker_running&lt;/code&gt; 的返回时。kretprobe 采用了栈的形式保存 &lt;code&gt;rethook node&lt;/code&gt; 信息，有利于 &lt;code&gt;arch_rethook_trampoline&lt;/code&gt; 快速地找到正确的 &lt;code&gt;rethook node&lt;/code&gt;。&lt;/p&gt;
+&lt;p&gt;&lt;code&gt;arch_rethook_trampoline&lt;/code&gt; [&lt;a href=&#34;https://elixir.bootlin.com/linux/v5.18/source/arch/x86/kernel/rethook.c#L62&#34;&gt;17&lt;/a&gt;] 是由一段汇编代码拼成，它主要是用来处理用户注册的观测程序，处理完毕后释放掉 &lt;code&gt;rethook node&lt;/code&gt;，并还原成正确的 Return-EIP。&lt;/p&gt;
+&lt;p&gt;rethook 的概念是近期 &lt;code&gt;x86,rethook,kprobes: Replace kretprobe with rethook on x86&lt;/code&gt; [&lt;a href=&#34;https://lore.kernel.org/bpf/164826163692.2455864.13745421016848209527.stgit@devnote2/&#34;&gt;18&lt;/a&gt;] 引入， 和早期的 &lt;code&gt;kretprobe-instance&lt;/code&gt; 概念作用类似。对于我而言，rethook 更容易理解 kretprobe，毕竟 kretprobe 是通过 kprobe 加入的一种回调钩子，等价于 kprobe + rethook。&lt;/p&gt;
+&lt;h2 id=&#34;fentryfexit---bpf_trampoline&#34;&gt;fentry/fexit - bpf_trampoline&lt;/h2&gt;
+&lt;p&gt;fentry/fexit 和 kprobe/kretprobe 功能类似，其中 &lt;code&gt;f&lt;/code&gt; 表示的是函数，fentry/fexit 分别用来观测函数入口和函数返回的事件。相比于 kprobe，它具有静态观测技术的特点。在高版本的 GCC 里，GCC 提供了 &lt;code&gt;-mentry&lt;/code&gt; 选项来为每一个函数入口生成一个埋点函数。为了实现 ftrace 技术，在编译内核会带上这个选项。由于可观测的函数很多，关键路径上频繁调用埋点函数会造成 &lt;strong&gt;13%&lt;/strong&gt; 的性能损失，因此内核在 Link 阶段会将这条 &lt;code&gt;Near CALL&lt;/code&gt; 指令替换成 &lt;code&gt;NOP5 指令&lt;/code&gt;。&lt;/p&gt;
+&lt;p&gt;&lt;img src=&#34;https://fuweid.com/img/2022-ebpf-kprobe-fentry-poke/gcc-mentry.svg&#34; alt=&#34;&#34;&gt;&lt;/p&gt;
+&lt;p&gt;&lt;code&gt;NOP5&lt;/code&gt; 指令长度为五个字节，所以对于那些可观测的函数来说，kprobe jump 优化方案肯定是适用的。
+但 fentry/fexit 采用的并不是 &lt;code&gt;Near JMP&lt;/code&gt;，而是 &lt;code&gt;Near CALL&lt;/code&gt;。下图展示的是 fentry eBPF 观测程序关联到 &lt;code&gt;do_unlinkat&lt;/code&gt; 函数入口处的过程。&lt;/p&gt;
+&lt;p&gt;首先 &lt;code&gt;bpf_tramp_image_alloc&lt;/code&gt; [&lt;a href=&#34;https://elixir.bootlin.com/linux/v5.18/source/kernel/bpf/trampoline.c#L290&#34;&gt;19&lt;/a&gt;] 函数会申请一个页大小的指令内存空间，而这个指令内存空间的地址将有一个符号标记，符号的命名规则为 &lt;code&gt;bpf_trampoline_$key_$index&lt;/code&gt;。 &lt;code&gt;key&lt;/code&gt; 是通过 BTF ID 来生成，只要关联的函数固定，这个 &lt;code&gt;key&lt;/code&gt; 值是固定的; 而 &lt;code&gt;index&lt;/code&gt; 是一个自增的 ID，每一次调用 &lt;code&gt;bpf_tracing_prog_attach&lt;/code&gt; 函数来关联 eBPF 程序时，它会都 &lt;code&gt;+1&lt;/code&gt;。eBPF fentry 并没有 kprobe 那样的 &lt;code&gt;pre_handler&lt;/code&gt; 聚合函数，每次关联观测程序都需要重新生成汇编指令，而重新生成的 &lt;code&gt;bpf_tramp_image&lt;/code&gt; 将通过新的 &lt;code&gt;index&lt;/code&gt; 来做区分。我们可以通过 &lt;code&gt;/proc/kallsyms&lt;/code&gt; 来查看这个符号，当然也可以通过符号后的 &lt;code&gt;index&lt;/code&gt; 来查看被观测函数的关联次数。&lt;/p&gt;
+&lt;p&gt;&lt;img src=&#34;https://fuweid.com/img/2022-ebpf-kprobe-fentry-poke/fentry-fexit-bpf_trampoline_link.svg&#34; alt=&#34;&#34;&gt;&lt;/p&gt;
+&lt;p&gt;fentry 会通过 &lt;code&gt;arch_prepare_bpf_trampoline&lt;/code&gt; [&lt;a href=&#34;https://elixir.bootlin.com/linux/v5.18/source/arch/x86/net/bpf_jit_comp.c#L1981&#34;&gt;20&lt;/a&gt;] 函数在新申请的 &lt;code&gt;bpf_tramp_image&lt;/code&gt; 上添加必要的指令：将 &lt;code&gt;do_unlinkat&lt;/code&gt; 的函数参数压入栈，然后生成调用已关联的 eBPF 观测程序指令，当然中间还会记录 eBPF 程序调用的耗时，最后会调用 &lt;code&gt;RET&lt;/code&gt; 来结束该过程。最后这个 &lt;code&gt;bpf_tramp_image&lt;/code&gt; 跳板函数会替换掉 &lt;code&gt;do_unlinkat&lt;/code&gt; 函数入口处 &lt;code&gt;NOP5&lt;/code&gt; 的指令。替换过程和 kprobe jump 优化一样，同样是通过 &lt;code&gt;text_poke_bp&lt;/code&gt; 三步更新模式来替换，最后这个 &lt;code&gt;NOP5&lt;/code&gt; 会变成 &lt;code&gt;Near CALL &amp;lt;bpf_tramopline_$key_1&amp;gt;&lt;/code&gt;。当然，如果再次添加一个新的 &lt;code&gt;fentry/do_unlinkat&lt;/code&gt; 观测程序，那么该指令将从 &lt;code&gt;Near CALL &amp;lt;bpf_trampoline_$key_1&amp;gt;&lt;/code&gt; 变成 &lt;code&gt;Near CALL &amp;lt;bpf_tramopline_$key_2&amp;gt;&lt;/code&gt;。&lt;/p&gt;
+&lt;p&gt;对于 fexit 而言，&lt;code&gt;arch_prepare_bpf_trampoline&lt;/code&gt; 生成的指令稍微复杂些，但也不难理解，其中唯一的区别在于， &lt;code&gt;do_unlinkat&lt;/code&gt; 的调用是发生在 &lt;code&gt;bpf_trampoline_$key_$index&lt;/code&gt; 函数体内，而 &lt;code&gt;bpf_trampoline_$key_$index&lt;/code&gt; 函数返回后将直接返回到调用 &lt;code&gt;do_unlinkat&lt;/code&gt; 的地方。在这里，就不再贴图说明啦，更多细节可以查看 arch_prepare_bpf_trampoline 函数体。&lt;/p&gt;
+&lt;h2 id=&#34;summary&#34;&gt;Summary&lt;/h2&gt;
+&lt;p&gt;kprobe 和 fentry/fexit 使用的动态观测技术大同小异，都是通过跳板形式来完成对指令或者函数的观测,都是在开着飞机换引擎。就目前了解的情况来看，fentry eBPF 跳板模式的代码结构和内存使用更简单，没有额外的 kprobe perf_event 数据结构介入。如果内核支持 fentry 的话，我倾向使用 fentry :)。&lt;/p&gt;
+</description>
+        </item>
         
         <item>
           <title>embedshim: 内核是我的边车</title>
