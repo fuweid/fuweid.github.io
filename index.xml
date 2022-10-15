@@ -3,9 +3,96 @@
         <title>FuWei</title>
         <link>https://fuweid.com/</link>
         <copyright>2022 Wei Fu</copyright>
-        <lastBuildDate>Sun, 12 Jun 2022 12:00:53 +0800</lastBuildDate>
+        <lastBuildDate>Sat, 15 Oct 2022 18:20:45 +0800</lastBuildDate>
         <atom:link href="/" rel="self" type="application/rss+xml" />
 
+        
+        <item>
+          <title>使用 unshare(CLONE_FS) 来优化 OverlayFS 挂载</title>
+          <link>/post/2022-go-unshare-clonefs/</link>
+          <pubDate>Sat, 15 Oct 2022 18:20:45 +0800</pubDate>
+          <guid>https://fuweid.com/post/2022-go-unshare-clonefs/</guid>
+          <description>&lt;h3 id=&#34;背景&#34;&gt;背景&lt;/h3&gt;
+&lt;p&gt;在 Linux 平台上，大部分情况下会使用 &lt;a href=&#34;https://docs.kernel.org/filesystems/overlayfs.html&#34;&gt;OverlayFS&lt;/a&gt; 文件系统来管理容器镜像存储，而 OverlayFS 文件的特点也比较符合容器场景使用：它不仅可以将多个目录合并成统一的访问视图，还能做到读写分离。&lt;/p&gt;
+&lt;div class=&#34;highlight&#34;&gt;&lt;pre class=&#34;chroma&#34;&gt;&lt;code class=&#34;language-bash&#34; data-lang=&#34;bash&#34;&gt;mount -t overlay overlay &lt;span class=&#34;se&#34;&gt;\
+&lt;/span&gt;&lt;span class=&#34;se&#34;&gt;&lt;/span&gt;  -olowerdir&lt;span class=&#34;o&#34;&gt;=&lt;/span&gt;/lower1:/lower2:/lower3,upperdir&lt;span class=&#34;o&#34;&gt;=&lt;/span&gt;/upper,workdir&lt;span class=&#34;o&#34;&gt;=&lt;/span&gt;/work &lt;span class=&#34;se&#34;&gt;\
+&lt;/span&gt;&lt;span class=&#34;se&#34;&gt;&lt;/span&gt;  /merged
+&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;p&gt;如上面的挂载命令所示， lowerdir 代表着容器镜像层解压后的目录。从 OCI Image 标准 定义来看，容器镜像的层数并没有限制。但 &lt;a href=&#34;https://man7.org/linux/man-pages/man2/mount.2.html&#34;&gt;mount(2)&lt;/a&gt; 系统调用的参数被严格限制在 4KiB，所以实际使用的容器镜像层级有限制的。&lt;/p&gt;
+&lt;p&gt;为了解决这个层级的问题，Docker 采用压缩 lowerdir 参数来尽可能地支持更多层级的容器镜像。Docker 存储插件使用 &lt;code&gt;l/${random-id(len=26)}&lt;/code&gt; 软链接指向实际的存储目录，然后跳到 &lt;code&gt;/var/lib/docker/overlay2&lt;/code&gt; 目录下进行挂载，这样就不需要在 lowerdir 参数里重复填写 &lt;code&gt;/var/lib/docker/overlay2/&lt;/code&gt; 这 25 个字符。按照 Docker 代码里的注释，Overlay 镜像存储最大可支持到 128 层。&lt;/p&gt;
+&lt;div class=&#34;highlight&#34;&gt;&lt;pre class=&#34;chroma&#34;&gt;&lt;code class=&#34;language-bash&#34; data-lang=&#34;bash&#34;&gt;/var/lib/docker/overlay2/l/63WSQBTYICXV2O7SOZXAXYLAY2 
+  -&amp;gt; ../f98d68377b05c44bacc062397f7ebaaf066b070fce15fbcfe824698d15f2eaa8/diff
+&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;p&gt;但在当时，Go 并没有提供太多的线程操作，所有被 Go-Runtime 管理的线程都使用了 &lt;a href=&#34;https://man7.org/linux/man-pages/man2/clone.2.html&#34;&gt;CLONE_FS&lt;/a&gt;。一旦某个 Goroutine 通过 Chdir 修改了当前工作目录，这会污染到整个进程，Docker 无法基于这样的方式来并发处理 OverlayFS 挂载请求，所以在当时只能选择 Fork-Exec 子进程来处理。考虑到维护多个二进制的成本过高，Docker 采用了 Re-exec 的方式。&lt;/p&gt;
+&lt;p&gt;不管怎么样，Fork-Exec 处理挂载成本很高，而且这样挂载逻辑没法独立成一个 Go Package，它要求使用者在 Go-Main-Init 函数里添加启动的预处理逻辑。所以在 containerd 项目里，我们采用了 Clone-Thread 的形式。&lt;/p&gt;
+&lt;p&gt;这个 Patch 是 Derek 带着我做的，也算是我给 containerd 提交的第一个有意思的修改。当时我们模拟了 Go-Exec-Fork 进程的步骤来创建线程。但毕竟这个线程的状态并不能用于其他 Goroutine，所以我们会锁住这个线程，这个线程在处理完 Chdir 和 mount 之后就主动退出，避免对整个进程的影响。当然这种模拟 Go-Exec-Fork 进程的行为不只有我们这么做，gVisor 也这么玩 ：）&lt;/p&gt;
+&lt;div class=&#34;highlight&#34;&gt;&lt;pre class=&#34;chroma&#34;&gt;&lt;code class=&#34;language-go&#34; data-lang=&#34;go&#34;&gt;&lt;span class=&#34;c1&#34;&gt;//go:linkname beforeFork syscall.runtime_BeforeFork
+&lt;/span&gt;&lt;span class=&#34;c1&#34;&gt;&lt;/span&gt;&lt;span class=&#34;kd&#34;&gt;func&lt;/span&gt; &lt;span class=&#34;nf&#34;&gt;beforeFork&lt;/span&gt;&lt;span class=&#34;p&#34;&gt;()&lt;/span&gt;
+
+&lt;span class=&#34;c1&#34;&gt;//go:linkname afterFork syscall.runtime_AfterFork
+&lt;/span&gt;&lt;span class=&#34;c1&#34;&gt;&lt;/span&gt;&lt;span class=&#34;kd&#34;&gt;func&lt;/span&gt; &lt;span class=&#34;nf&#34;&gt;afterFork&lt;/span&gt;&lt;span class=&#34;p&#34;&gt;()&lt;/span&gt;
+
+&lt;span class=&#34;c1&#34;&gt;//go:linkname afterForkInChild syscall.runtime_AfterForkInChild
+&lt;/span&gt;&lt;span class=&#34;c1&#34;&gt;&lt;/span&gt;&lt;span class=&#34;kd&#34;&gt;func&lt;/span&gt; &lt;span class=&#34;nf&#34;&gt;afterForkInChild&lt;/span&gt;&lt;span class=&#34;p&#34;&gt;()&lt;/span&gt;
+&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;p&gt;模拟 Go-Exec-Fork 来管理线程在 containerd 平稳运行了近 5 年，但最近社区的 Brian Goff 和 Cory Snider 工程师发现还有更好的处理方式。&lt;/p&gt;
+&lt;h3 id=&#34;unshareclone_fs&#34;&gt;Unshare(CLONE_FS)&lt;/h3&gt;
+&lt;pre&gt;&lt;code&gt;https://man7.org/linux/man-pages/man2/unshare.2.html
+
+CLONE_FS
+              Reverse the effect of the clone(2) CLONE_FS flag.  Unshare
+              filesystem attributes, so that the calling process no
+              longer shares its root directory (chroot(2)), current
+              directory (chdir(2)), or umask (umask(2)) attributes with
+              any other process.
+&lt;/code&gt;&lt;/pre&gt;&lt;p&gt;根据 &lt;a href=&#34;https://man7.org/linux/man-pages/man2/unshare.2.html&#34;&gt;unshare(2)&lt;/a&gt; 的文档来看，CLONE_FS 只提到了进程。但通过实践来看，它是可以作用在单个线程上。如下面的代码所示，syscall.Unshare(CLONE_FS) 之后修改当前工作目录并不会对其他线程造成影响。&lt;/p&gt;
+&lt;div class=&#34;highlight&#34;&gt;&lt;pre class=&#34;chroma&#34;&gt;&lt;code class=&#34;language-bash&#34; data-lang=&#34;bash&#34;&gt;➜  /tmp cat main.go
+package main
+
+import &lt;span class=&#34;o&#34;&gt;(&lt;/span&gt;
+        &lt;span class=&#34;s2&#34;&gt;&amp;#34;fmt&amp;#34;&lt;/span&gt;
+        &lt;span class=&#34;s2&#34;&gt;&amp;#34;os&amp;#34;&lt;/span&gt;
+        &lt;span class=&#34;s2&#34;&gt;&amp;#34;runtime&amp;#34;&lt;/span&gt;
+        &lt;span class=&#34;s2&#34;&gt;&amp;#34;syscall&amp;#34;&lt;/span&gt;
+&lt;span class=&#34;o&#34;&gt;)&lt;/span&gt;
+
+func main&lt;span class=&#34;o&#34;&gt;()&lt;/span&gt; &lt;span class=&#34;o&#34;&gt;{&lt;/span&gt;
+        ch :&lt;span class=&#34;o&#34;&gt;=&lt;/span&gt; make&lt;span class=&#34;o&#34;&gt;(&lt;/span&gt;chan struct&lt;span class=&#34;o&#34;&gt;{})&lt;/span&gt;
+        go func&lt;span class=&#34;o&#34;&gt;()&lt;/span&gt; &lt;span class=&#34;o&#34;&gt;{&lt;/span&gt;
+                runtime.LockOSThread&lt;span class=&#34;o&#34;&gt;()&lt;/span&gt;
+                defer close&lt;span class=&#34;o&#34;&gt;(&lt;/span&gt;ch&lt;span class=&#34;o&#34;&gt;)&lt;/span&gt;
+
+                syscall.Unshare&lt;span class=&#34;o&#34;&gt;(&lt;/span&gt;syscall.CLONE_FS&lt;span class=&#34;o&#34;&gt;)&lt;/span&gt;
+                syscall.Chdir&lt;span class=&#34;o&#34;&gt;(&lt;/span&gt;&lt;span class=&#34;s2&#34;&gt;&amp;#34;/etc&amp;#34;&lt;/span&gt;&lt;span class=&#34;o&#34;&gt;)&lt;/span&gt;
+
+                fmt.Println&lt;span class=&#34;o&#34;&gt;(&lt;/span&gt;os.Getwd&lt;span class=&#34;o&#34;&gt;())&lt;/span&gt;
+        &lt;span class=&#34;o&#34;&gt;}()&lt;/span&gt;
+        &amp;lt;-ch
+        fmt.Println&lt;span class=&#34;o&#34;&gt;(&lt;/span&gt;os.Getwd&lt;span class=&#34;o&#34;&gt;())&lt;/span&gt;
+&lt;span class=&#34;o&#34;&gt;}&lt;/span&gt;
+
+➜  /tmp go run main.go
+/etc &amp;lt;nil&amp;gt;
+/tmp &amp;lt;nil&amp;gt;
+&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;p&gt;unshare 提供了对 Go 管理线程改造的能力，再配合上 &lt;code&gt;runtime.LockOSThread&lt;/code&gt; 锁线程的能力，基本上就可以 Go 来做一些更底层的操作了。理论上来说，&lt;a href=&#34;https://github.com/containerd/containerd/pull/7513&#34;&gt;Replace mount fork hack with CLONE_FS&lt;/a&gt; 是比前面模拟 Go-Fork-Exec 逻辑更优秀的解法。而且除此之外，unshare(CLONE_FS) 还支持 chroot, umask 等系统调用，这无疑是给容器相关的编程带来了很大便利。&lt;/p&gt;
+&lt;p&gt;但目前这个优化并没有在 containerd 社区合并，原因是我们发现 Go-Runtime 自身的问题。&lt;/p&gt;
+&lt;h3 id=&#34;后续跟进&#34;&gt;后续跟进&lt;/h3&gt;
+&lt;p&gt;首先，Go-Runtime 的 LockOSThread 文档没有提及 Main-Thread 的特殊性。在 Linux Kernel 里，Main Thread 其实就是我们平时提到的进程；当它被 LockOSThread 了但没有被 Unlock，按照官方文档说明，这个线程会主动退出。但实际上 Main-Thread 一旦推出，整个进程就变成僵尸状态，也就是退出了，所以 Go-Runtime 并不会退出这个线程，只是将其变成不可调度状态。&lt;/p&gt;
+&lt;p&gt;其实，在 Github Action Pipeline 里，我们发现 Go-Runtime 自身处理锁的时候有问题，也不知道是不是和 Main-Thread 没有退出有关导致。比较麻烦的是，每次出现的错误都不一样。&lt;/p&gt;
+&lt;div class=&#34;highlight&#34;&gt;&lt;pre class=&#34;chroma&#34;&gt;&lt;code class=&#34;language-bash&#34; data-lang=&#34;bash&#34;&gt;https://github.com/fuweid/containerd-pr-7513/actions/runs/3255360436/jobs/5345228547
+
+runtime: newstack at runtime.checkdead+0x2f5 &lt;span class=&#34;nv&#34;&gt;sp&lt;/span&gt;&lt;span class=&#34;o&#34;&gt;=&lt;/span&gt;0x7fb781e8ae38 &lt;span class=&#34;nv&#34;&gt;stack&lt;/span&gt;&lt;span class=&#34;o&#34;&gt;=[&lt;/span&gt;0xc00004c800, 0xc00004d000&lt;span class=&#34;o&#34;&gt;]&lt;/span&gt;
+	&lt;span class=&#34;nv&#34;&gt;morebuf&lt;/span&gt;&lt;span class=&#34;o&#34;&gt;={&lt;/span&gt;pc:0x4745df sp:0x7fb781e8ae40 lr:0x0&lt;span class=&#34;o&#34;&gt;}&lt;/span&gt;
+	&lt;span class=&#34;nv&#34;&gt;sched&lt;/span&gt;&lt;span class=&#34;o&#34;&gt;={&lt;/span&gt;pc:0x47c975 sp:0x7fb781e8ae38 lr:0x0 ctxt:0x0&lt;span class=&#34;o&#34;&gt;}&lt;/span&gt;
+runtime.mexit&lt;span class=&#34;o&#34;&gt;(&lt;/span&gt;0x1&lt;span class=&#34;o&#34;&gt;)&lt;/span&gt;
+	/opt/hostedtoolcache/go/1.19.2/x64/src/runtime/proc.go:1545 +0x17f &lt;span class=&#34;nv&#34;&gt;fp&lt;/span&gt;&lt;span class=&#34;o&#34;&gt;=&lt;/span&gt;0x7fb781e8ae70 &lt;span class=&#34;nv&#34;&gt;sp&lt;/span&gt;&lt;span class=&#34;o&#34;&gt;=&lt;/span&gt;0x7fb781e8ae40 &lt;span class=&#34;nv&#34;&gt;pc&lt;/span&gt;&lt;span class=&#34;o&#34;&gt;=&lt;/span&gt;0x4&lt;span class=&#34;o&#34;&gt;[&lt;/span&gt;74&lt;span class=&#34;o&#34;&gt;](&lt;/span&gt;https://github.com/fuweid/containerd-pr-7513/actions/runs/3255360436/jobs/5345228547#step:5:75&lt;span class=&#34;o&#34;&gt;)&lt;/span&gt;5df
+runtime.mstart0&lt;span class=&#34;o&#34;&gt;()&lt;/span&gt;
+	/opt/hostedtoolcache/go/1.19.2/x64/src/runtime/proc.go:1391 +0x89 &lt;span class=&#34;nv&#34;&gt;fp&lt;/span&gt;&lt;span class=&#34;o&#34;&gt;=&lt;/span&gt;0x7fb781e8aea0 &lt;span class=&#34;nv&#34;&gt;sp&lt;/span&gt;&lt;span class=&#34;o&#34;&gt;=&lt;/span&gt;0x7fb781e8ae70 &lt;span class=&#34;nv&#34;&gt;pc&lt;/span&gt;&lt;span class=&#34;o&#34;&gt;=&lt;/span&gt;0x474289
+runtime.mstart&lt;span class=&#34;o&#34;&gt;()&lt;/span&gt;
+	/opt/hostedtoolcache/go/1.19.2/x64/src/runtime/asm_amd64.s:390 +0x5 &lt;span class=&#34;nv&#34;&gt;fp&lt;/span&gt;&lt;span class=&#34;o&#34;&gt;=&lt;/span&gt;0x7fb781e8aea8 &lt;span class=&#34;nv&#34;&gt;sp&lt;/span&gt;&lt;span class=&#34;o&#34;&gt;=&lt;/span&gt;0x7fb781e8aea0 &lt;span class=&#34;nv&#34;&gt;pc&lt;/span&gt;&lt;span class=&#34;o&#34;&gt;=&lt;/span&gt;0x4a2725
+created by github.com/fuweid/containerd-pr-&lt;span class=&#34;o&#34;&gt;[&lt;/span&gt;75&lt;span class=&#34;o&#34;&gt;](&lt;/span&gt;https://github.com/fuweid/containerd-pr-7513/actions/runs/3255360436/jobs/5345228547#step:5:76&lt;span class=&#34;o&#34;&gt;)&lt;/span&gt;13.mountAt
+	/home/runner/work/containerd-pr-7513/containerd-pr-7513/mount.go:126 +0x2ac
+fatal error: runtime: stack split at bad &lt;span class=&#34;nb&#34;&gt;time&lt;/span&gt;
+&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;p&gt;具体问题描述都在 &lt;a href=&#34;https://github.com/golang/go/issues/56243&#34;&gt;runtime: &amp;ldquo;runtime·lock: lock count&amp;rdquo; fatal error when cgo is enabled&lt;/a&gt;，感兴趣的朋友可以关注下这个问题。&lt;/p&gt;
+</description>
+        </item>
         
         <item>
           <title>eBPF 动态观测之指令跳板</title>

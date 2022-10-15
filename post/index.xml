@@ -5,10 +5,23 @@
     <link>https://fuweid.com/post/</link>
     <description>Recent content in Posts on FuWei</description>
     <generator>Hugo -- gohugo.io</generator>
-    <lastBuildDate>Sun, 12 Jun 2022 12:00:53 +0800</lastBuildDate>
+    <lastBuildDate>Sat, 15 Oct 2022 18:20:45 +0800</lastBuildDate>
     
 	<atom:link href="https://fuweid.com/post/index.xml" rel="self" type="application/rss+xml" />
     
+    
+    <item>
+      <title>使用 unshare(CLONE_FS) 来优化 OverlayFS 挂载</title>
+      <link>https://fuweid.com/post/2022-go-unshare-clonefs/</link>
+      <pubDate>Sat, 15 Oct 2022 18:20:45 +0800</pubDate>
+      
+      <guid>https://fuweid.com/post/2022-go-unshare-clonefs/</guid>
+      <description>背景 在 Linux 平台上，大部分情况下会使用 OverlayFS 文件系统来管理容器镜像存储，而 OverlayFS 文件的特点也比较符合容器场景使用：它不仅可以将多个目录合并成统一的访问视图，还能做到读写分离。
+mount -t overlay overlay \  -olowerdir=/lower1:/lower2:/lower3,upperdir=/upper,workdir=/work \  /merged 如上面的挂载命令所示， lowerdir 代表着容器镜像层解压后的目录。从 OCI Image 标准 定义来看，容器镜像的层数并没有限制。但 mount(2) 系统调用的参数被严格限制在 4KiB，所以实际使用的容器镜像层级有限制的。
+为了解决这个层级的问题，Docker 采用压缩 lowerdir 参数来尽可能地支持更多层级的容器镜像。Docker 存储插件使用 l/${random-id(len=26)} 软链接指向实际的存储目录，然后跳到 /var/lib/docker/overlay2 目录下进行挂载，这样就不需要在 lowerdir 参数里重复填写 /var/lib/docker/overlay2/ 这 25 个字符。按照 Docker 代码里的注释，Overlay 镜像存储最大可支持到 128 层。
+/var/lib/docker/overlay2/l/63WSQBTYICXV2O7SOZXAXYLAY2 -&amp;gt; ../f98d68377b05c44bacc062397f7ebaaf066b070fce15fbcfe824698d15f2eaa8/diff 但在当时，Go 并没有提供太多的线程操作，所有被 Go-Runtime 管理的线程都使用了 CLONE_FS。一旦某个 Goroutine 通过 Chdir 修改了当前工作目录，这会污染到整个进程，Docker 无法基于这样的方式来并发处理 OverlayFS 挂载请求，所以在当时只能选择 Fork-Exec 子进程来处理。考虑到维护多个二进制的成本过高，Docker 采用了 Re-exec 的方式。
+不管怎么样，Fork-Exec 处理挂载成本很高，而且这样挂载逻辑没法独立成一个 Go Package，它要求使用者在 Go-Main-Init 函数里添加启动的预处理逻辑。所以在 containerd 项目里，我们采用了 Clone-Thread 的形式。</description>
+    </item>
     
     <item>
       <title>eBPF 动态观测之指令跳板</title>

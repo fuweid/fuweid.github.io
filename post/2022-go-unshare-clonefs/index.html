@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html>
+    <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+    <title>
+        
+            FuWei: 使用 unshare(CLONE_FS) 来优化 OverlayFS 挂载
+        
+    </title>
+
+    <meta property="og:title" content="使用 unshare(CLONE_FS) 来优化 OverlayFS 挂载"/>
+    <meta property="og:Section" content="website"/>
+    <meta property="og:url" content="https://fuweid.com/post/2022-go-unshare-clonefs/"/>
+    <meta property="og:image" content="https://fuweid.com/favicon.jpg"/>
+    <meta property="og:site_name" content="FuWei"/>
+    <meta property="og:description" content="一次不错的尝试"/>
+
+    <link rel="stylesheet" href="/css/fontawesome/all.css" />
+    <link rel="stylesheet" href="/css/main.css" /> 
+    <link rel="stylesheet" href="/css/normalize.css">
+    <link rel="stylesheet" href="/css/prettify.css">
+    <link rel="shortcut icon" href="https://fuweid.com/favicon.jpg">
+    <link rel="icon" href="https://fuweid.com/favicon.jpg">
+    <script type="text/javascript" src="/js/prettify.js"></script>
+</head>
+
+
+    <body onload="doPrettify()">
+        <header>
+    <nav>
+        <ul class="home">
+            <li>
+                <a href="https://fuweid.com/">FuWei</a>
+            </li>
+        </ul>
+        <ul class="social">
+            <li>
+                <a class="fab fa-github" href="https://github.com/fuweid" target="_blank"></a>
+            </li>
+            <li>
+                <a class="fab fa-twitter" href="https://twitter.com/fuweid89" target="_blank"></a>
+            </li>
+            <li>
+                <a class="fas fa-rss" href="https://fuweid.com//index.xml" target="_blank"></a>
+            </li>
+        </ul>
+    </nav>
+</header>
+
+
+        <div class="container">
+            <article class="single">
+                <h2 class="title"> 使用 unshare(CLONE_FS) 来优化 OverlayFS 挂载 </h2>
+                <h5 class="time"> October 15, 2022 </h5>
+                <h3 id="背景">背景</h3>
+<p>在 Linux 平台上，大部分情况下会使用 <a href="https://docs.kernel.org/filesystems/overlayfs.html">OverlayFS</a> 文件系统来管理容器镜像存储，而 OverlayFS 文件的特点也比较符合容器场景使用：它不仅可以将多个目录合并成统一的访问视图，还能做到读写分离。</p>
+<div class="highlight"><pre class="chroma"><code class="language-bash" data-lang="bash">mount -t overlay overlay <span class="se">\
+</span><span class="se"></span>  -olowerdir<span class="o">=</span>/lower1:/lower2:/lower3,upperdir<span class="o">=</span>/upper,workdir<span class="o">=</span>/work <span class="se">\
+</span><span class="se"></span>  /merged
+</code></pre></div><p>如上面的挂载命令所示， lowerdir 代表着容器镜像层解压后的目录。从 OCI Image 标准 定义来看，容器镜像的层数并没有限制。但 <a href="https://man7.org/linux/man-pages/man2/mount.2.html">mount(2)</a> 系统调用的参数被严格限制在 4KiB，所以实际使用的容器镜像层级有限制的。</p>
+<p>为了解决这个层级的问题，Docker 采用压缩 lowerdir 参数来尽可能地支持更多层级的容器镜像。Docker 存储插件使用 <code>l/${random-id(len=26)}</code> 软链接指向实际的存储目录，然后跳到 <code>/var/lib/docker/overlay2</code> 目录下进行挂载，这样就不需要在 lowerdir 参数里重复填写 <code>/var/lib/docker/overlay2/</code> 这 25 个字符。按照 Docker 代码里的注释，Overlay 镜像存储最大可支持到 128 层。</p>
+<div class="highlight"><pre class="chroma"><code class="language-bash" data-lang="bash">/var/lib/docker/overlay2/l/63WSQBTYICXV2O7SOZXAXYLAY2 
+  -&gt; ../f98d68377b05c44bacc062397f7ebaaf066b070fce15fbcfe824698d15f2eaa8/diff
+</code></pre></div><p>但在当时，Go 并没有提供太多的线程操作，所有被 Go-Runtime 管理的线程都使用了 <a href="https://man7.org/linux/man-pages/man2/clone.2.html">CLONE_FS</a>。一旦某个 Goroutine 通过 Chdir 修改了当前工作目录，这会污染到整个进程，Docker 无法基于这样的方式来并发处理 OverlayFS 挂载请求，所以在当时只能选择 Fork-Exec 子进程来处理。考虑到维护多个二进制的成本过高，Docker 采用了 Re-exec 的方式。</p>
+<p>不管怎么样，Fork-Exec 处理挂载成本很高，而且这样挂载逻辑没法独立成一个 Go Package，它要求使用者在 Go-Main-Init 函数里添加启动的预处理逻辑。所以在 containerd 项目里，我们采用了 Clone-Thread 的形式。</p>
+<p>这个 Patch 是 Derek 带着我做的，也算是我给 containerd 提交的第一个有意思的修改。当时我们模拟了 Go-Exec-Fork 进程的步骤来创建线程。但毕竟这个线程的状态并不能用于其他 Goroutine，所以我们会锁住这个线程，这个线程在处理完 Chdir 和 mount 之后就主动退出，避免对整个进程的影响。当然这种模拟 Go-Exec-Fork 进程的行为不只有我们这么做，gVisor 也这么玩 ：）</p>
+<div class="highlight"><pre class="chroma"><code class="language-go" data-lang="go"><span class="c1">//go:linkname beforeFork syscall.runtime_BeforeFork
+</span><span class="c1"></span><span class="kd">func</span> <span class="nf">beforeFork</span><span class="p">()</span>
+
+<span class="c1">//go:linkname afterFork syscall.runtime_AfterFork
+</span><span class="c1"></span><span class="kd">func</span> <span class="nf">afterFork</span><span class="p">()</span>
+
+<span class="c1">//go:linkname afterForkInChild syscall.runtime_AfterForkInChild
+</span><span class="c1"></span><span class="kd">func</span> <span class="nf">afterForkInChild</span><span class="p">()</span>
+</code></pre></div><p>模拟 Go-Exec-Fork 来管理线程在 containerd 平稳运行了近 5 年，但最近社区的 Brian Goff 和 Cory Snider 工程师发现还有更好的处理方式。</p>
+<h3 id="unshareclone_fs">Unshare(CLONE_FS)</h3>
+<pre><code>https://man7.org/linux/man-pages/man2/unshare.2.html
+
+CLONE_FS
+              Reverse the effect of the clone(2) CLONE_FS flag.  Unshare
+              filesystem attributes, so that the calling process no
+              longer shares its root directory (chroot(2)), current
+              directory (chdir(2)), or umask (umask(2)) attributes with
+              any other process.
+</code></pre><p>根据 <a href="https://man7.org/linux/man-pages/man2/unshare.2.html">unshare(2)</a> 的文档来看，CLONE_FS 只提到了进程。但通过实践来看，它是可以作用在单个线程上。如下面的代码所示，syscall.Unshare(CLONE_FS) 之后修改当前工作目录并不会对其他线程造成影响。</p>
+<div class="highlight"><pre class="chroma"><code class="language-bash" data-lang="bash">➜  /tmp cat main.go
+package main
+
+import <span class="o">(</span>
+        <span class="s2">&#34;fmt&#34;</span>
+        <span class="s2">&#34;os&#34;</span>
+        <span class="s2">&#34;runtime&#34;</span>
+        <span class="s2">&#34;syscall&#34;</span>
+<span class="o">)</span>
+
+func main<span class="o">()</span> <span class="o">{</span>
+        ch :<span class="o">=</span> make<span class="o">(</span>chan struct<span class="o">{})</span>
+        go func<span class="o">()</span> <span class="o">{</span>
+                runtime.LockOSThread<span class="o">()</span>
+                defer close<span class="o">(</span>ch<span class="o">)</span>
+
+                syscall.Unshare<span class="o">(</span>syscall.CLONE_FS<span class="o">)</span>
+                syscall.Chdir<span class="o">(</span><span class="s2">&#34;/etc&#34;</span><span class="o">)</span>
+
+                fmt.Println<span class="o">(</span>os.Getwd<span class="o">())</span>
+        <span class="o">}()</span>
+        &lt;-ch
+        fmt.Println<span class="o">(</span>os.Getwd<span class="o">())</span>
+<span class="o">}</span>
+
+➜  /tmp go run main.go
+/etc &lt;nil&gt;
+/tmp &lt;nil&gt;
+</code></pre></div><p>unshare 提供了对 Go 管理线程改造的能力，再配合上 <code>runtime.LockOSThread</code> 锁线程的能力，基本上就可以 Go 来做一些更底层的操作了。理论上来说，<a href="https://github.com/containerd/containerd/pull/7513">Replace mount fork hack with CLONE_FS</a> 是比前面模拟 Go-Fork-Exec 逻辑更优秀的解法。而且除此之外，unshare(CLONE_FS) 还支持 chroot, umask 等系统调用，这无疑是给容器相关的编程带来了很大便利。</p>
+<p>但目前这个优化并没有在 containerd 社区合并，原因是我们发现 Go-Runtime 自身的问题。</p>
+<h3 id="后续跟进">后续跟进</h3>
+<p>首先，Go-Runtime 的 LockOSThread 文档没有提及 Main-Thread 的特殊性。在 Linux Kernel 里，Main Thread 其实就是我们平时提到的进程；当它被 LockOSThread 了但没有被 Unlock，按照官方文档说明，这个线程会主动退出。但实际上 Main-Thread 一旦推出，整个进程就变成僵尸状态，也就是退出了，所以 Go-Runtime 并不会退出这个线程，只是将其变成不可调度状态。</p>
+<p>其实，在 Github Action Pipeline 里，我们发现 Go-Runtime 自身处理锁的时候有问题，也不知道是不是和 Main-Thread 没有退出有关导致。比较麻烦的是，每次出现的错误都不一样。</p>
+<div class="highlight"><pre class="chroma"><code class="language-bash" data-lang="bash">https://github.com/fuweid/containerd-pr-7513/actions/runs/3255360436/jobs/5345228547
+
+runtime: newstack at runtime.checkdead+0x2f5 <span class="nv">sp</span><span class="o">=</span>0x7fb781e8ae38 <span class="nv">stack</span><span class="o">=[</span>0xc00004c800, 0xc00004d000<span class="o">]</span>
+	<span class="nv">morebuf</span><span class="o">={</span>pc:0x4745df sp:0x7fb781e8ae40 lr:0x0<span class="o">}</span>
+	<span class="nv">sched</span><span class="o">={</span>pc:0x47c975 sp:0x7fb781e8ae38 lr:0x0 ctxt:0x0<span class="o">}</span>
+runtime.mexit<span class="o">(</span>0x1<span class="o">)</span>
+	/opt/hostedtoolcache/go/1.19.2/x64/src/runtime/proc.go:1545 +0x17f <span class="nv">fp</span><span class="o">=</span>0x7fb781e8ae70 <span class="nv">sp</span><span class="o">=</span>0x7fb781e8ae40 <span class="nv">pc</span><span class="o">=</span>0x4<span class="o">[</span>74<span class="o">](</span>https://github.com/fuweid/containerd-pr-7513/actions/runs/3255360436/jobs/5345228547#step:5:75<span class="o">)</span>5df
+runtime.mstart0<span class="o">()</span>
+	/opt/hostedtoolcache/go/1.19.2/x64/src/runtime/proc.go:1391 +0x89 <span class="nv">fp</span><span class="o">=</span>0x7fb781e8aea0 <span class="nv">sp</span><span class="o">=</span>0x7fb781e8ae70 <span class="nv">pc</span><span class="o">=</span>0x474289
+runtime.mstart<span class="o">()</span>
+	/opt/hostedtoolcache/go/1.19.2/x64/src/runtime/asm_amd64.s:390 +0x5 <span class="nv">fp</span><span class="o">=</span>0x7fb781e8aea8 <span class="nv">sp</span><span class="o">=</span>0x7fb781e8aea0 <span class="nv">pc</span><span class="o">=</span>0x4a2725
+created by github.com/fuweid/containerd-pr-<span class="o">[</span>75<span class="o">](</span>https://github.com/fuweid/containerd-pr-7513/actions/runs/3255360436/jobs/5345228547#step:5:76<span class="o">)</span>13.mountAt
+	/home/runner/work/containerd-pr-7513/containerd-pr-7513/mount.go:126 +0x2ac
+fatal error: runtime: stack split at bad <span class="nb">time</span>
+</code></pre></div><p>具体问题描述都在 <a href="https://github.com/golang/go/issues/56243">runtime: &ldquo;runtime·lock: lock count&rdquo; fatal error when cgo is enabled</a>，感兴趣的朋友可以关注下这个问题。</p>
+
+            </article>
+        </div>
+
+        <footer>
+    &copy; 2022 Fu Wei
+</footer>
+
+<script>
+    function doPrettify(){
+        pres=document.getElementsByTagName('pre');
+        for (i=0; i < pres.length; i++) {
+            pres[i].className+=" prettyprint";
+        }
+        prettyPrint();
+    }
+</script>
+
+
+<script async src="https://www.googletagmanager.com/gtag/js?id=G-1C7VLVHN52"></script>
+<script>
+  window.dataLayer = window.dataLayer || [];
+  function gtag(){dataLayer.push(arguments);}
+  gtag('js', new Date());
+
+  gtag('config', 'G-1C7VLVHN52');
+</script>
+
+    </body>
+</html>
