@@ -32,7 +32,7 @@
 
 &lt;span class=&#34;c1&#34;&gt;//go:linkname afterForkInChild syscall.runtime_AfterForkInChild
 &lt;/span&gt;&lt;span class=&#34;c1&#34;&gt;&lt;/span&gt;&lt;span class=&#34;kd&#34;&gt;func&lt;/span&gt; &lt;span class=&#34;nf&#34;&gt;afterForkInChild&lt;/span&gt;&lt;span class=&#34;p&#34;&gt;()&lt;/span&gt;
-&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;p&gt;模拟 Go-Exec-Fork 来管理线程在 containerd 平稳运行了近 5 年，但最近社区的 Brian Goff 和 Cory Snider 工程师发现还有更好的处理方式。&lt;/p&gt;
+&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;p&gt;模拟 Go-Exec-Fork 来管理线程在 containerd 平稳运行了近 5 年，但最近社区的 Brian Goff 和 Cory Snider 发现还有更好的处理方式。&lt;/p&gt;
 &lt;h3 id=&#34;unshareclone_fs&#34;&gt;Unshare(CLONE_FS)&lt;/h3&gt;
 &lt;pre&gt;&lt;code&gt;https://man7.org/linux/man-pages/man2/unshare.2.html
 

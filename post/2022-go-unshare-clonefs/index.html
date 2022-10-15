@@ -74,7 +74,7 @@
 
 <span class="c1">//go:linkname afterForkInChild syscall.runtime_AfterForkInChild
 </span><span class="c1"></span><span class="kd">func</span> <span class="nf">afterForkInChild</span><span class="p">()</span>
-</code></pre></div><p>模拟 Go-Exec-Fork 来管理线程在 containerd 平稳运行了近 5 年，但最近社区的 Brian Goff 和 Cory Snider 工程师发现还有更好的处理方式。</p>
+</code></pre></div><p>模拟 Go-Exec-Fork 来管理线程在 containerd 平稳运行了近 5 年，但最近社区的 Brian Goff 和 Cory Snider 发现还有更好的处理方式。</p>
 <h3 id="unshareclone_fs">Unshare(CLONE_FS)</h3>
 <pre><code>https://man7.org/linux/man-pages/man2/unshare.2.html
 
