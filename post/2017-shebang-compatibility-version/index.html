@@ -1,122 +1,26 @@
-<!DOCTYPE html>
-<html>
-    <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-
-    <title>
-        
-            FuWei: shebang - #!
-        
-    </title>
-
-    <meta property="og:title" content="shebang - #!"/>
-    <meta property="og:Section" content="website"/>
-    <meta property="og:url" content="https://fuweid.com/post/2017-shebang-compatibility-version/"/>
-    <meta property="og:image" content="https://fuweid.com/favicon.jpg"/>
-    <meta property="og:site_name" content="FuWei"/>
-    <meta property="og:description" content="shell 脚本兼容性以及版本控制"/>
-
-    <link rel="stylesheet" href="/css/fontawesome/all.css" />
-    <link rel="stylesheet" href="/css/main.css" /> 
-    <link rel="stylesheet" href="/css/normalize.css">
-    <link rel="stylesheet" href="/css/prettify.css">
-    <link rel="shortcut icon" href="https://fuweid.com/favicon.jpg">
-    <link rel="icon" href="https://fuweid.com/favicon.jpg">
-    <script type="text/javascript" src="/js/prettify.js"></script>
-</head>
-
-
-    <body onload="doPrettify()">
-        <header>
-    <nav>
-        <ul class="home">
-            <li>
-                <a href="https://fuweid.com/">FuWei</a>
-            </li>
-        </ul>
-        <ul class="social">
-            <li>
-                <a class="fab fa-github" href="https://github.com/fuweid" target="_blank"></a>
-            </li>
-            <li>
-                <a class="fab fa-twitter" href="https://twitter.com/fuweid89" target="_blank"></a>
-            </li>
-            <li>
-                <a class="fas fa-rss" href="https://fuweid.com//index.xml" target="_blank"></a>
-            </li>
-        </ul>
-    </nav>
-</header>
-
-
-        <div class="container">
-            <article class="single">
-                <h2 class="title"> shebang - #! </h2>
-                <h5 class="time"> March 19, 2017 </h5>
-                <p>写脚本的时候通常会在脚本的开头加上 <a href="https://en.wikipedia.org/wiki/Shebang_(Unix)">shebang</a>, 系统会将这段内容作为解释器指令，比如 bash shell 脚本。</p>
-<pre><code>$&gt; cat example
-#!/usr/bin/bash
-echo &quot;HaHa&quot;
-
-$&gt; chmod +x ./example
-
-$&gt; ./example
-HaHa
-</code></pre><p>只要为脚本添加了可执行的属性，那么内核在执行脚本的时候，会调用 shebang 描述的解释器来执行脚本。
-<code>./exmaple</code> 其实等价于 <code>/usr/bin/bash ./example</code>。shebang 描述的解释器需要写其绝对路径或者相对路径，因为内核并不会在用户设置的 <code>PATH</code> 里找解释器。关于 shebang，讨论最多的应该是 <strong>兼容性</strong> 和 <strong>版本控制</strong> 问题。</p>
-<h3 id="兼容性">兼容性</h3>
-<p>Linux 和 Unix 在存放解释器的具体路径不太一致，比如 Linux 会放到 <code>/usr/bin/</code> 中，而 openBSD 会放到 <code>/usr/local/bin/</code> 中。不同包管理器在安装解释器的时候，存放的位置也不尽相同。
-当你在 Mac  上写了 shell  脚本，测试并提交到代码库。
+<!doctype html><html lang=en dir=auto><head><meta charset=utf-8><meta http-equiv=x-ua-compatible content="IE=edge"><meta name=viewport content="width=device-width,initial-scale=1,shrink-to-fit=no"><meta name=robots content="index, follow"><title>shebang - #! | fuweid</title><meta name=keywords content><meta name=description content="shell 脚本兼容性以及版本控制"><meta name=author content><link rel=canonical href=https://fuweid.com/post/2017-shebang-compatibility-version/><link crossorigin=anonymous href=/assets/css/stylesheet.bc1149f4a72aa4858d3a9f71462f75e5884ffe8073ea9d6d5761d5663d651e20.css integrity="sha256-vBFJ9KcqpIWNOp9xRi915YhP/oBz6p1tV2HVZj1lHiA=" rel="preload stylesheet" as=style><script defer crossorigin=anonymous src=/assets/js/highlight.f413e19d0714851f6474e7ee9632408e58ac146fbdbe62747134bea2fa3415e0.js integrity="sha256-9BPhnQcUhR9kdOfuljJAjlisFG+9vmJ0cTS+ovo0FeA=" onload=hljs.initHighlightingOnLoad()></script>
+<link rel=icon href=https://fuweid.com/favicon.jpg><link rel=icon type=image/png sizes=16x16 href=https://fuweid.com/favicon-16x16.png><link rel=icon type=image/png sizes=32x32 href=https://fuweid.com/favicon-32x32.png><link rel=apple-touch-icon href=https://fuweid.com/apple-touch-icon.png><link rel=mask-icon href=https://fuweid.com/safari-pinned-tab.svg><meta name=theme-color content="#2e2e33"><meta name=msapplication-TileColor content="#2e2e33"><noscript><style>#theme-toggle,.top-link{display:none}</style><style>@media(prefers-color-scheme:dark){:root{--theme:rgb(29, 30, 32);--entry:rgb(46, 46, 51);--primary:rgb(218, 218, 219);--secondary:rgb(155, 156, 157);--tertiary:rgb(65, 66, 68);--content:rgb(196, 196, 197);--hljs-bg:rgb(46, 46, 51);--code-bg:rgb(55, 56, 62);--border:rgb(51, 51, 51)}.list{background:var(--theme)}.list:not(.dark)::-webkit-scrollbar-track{background:0 0}.list:not(.dark)::-webkit-scrollbar-thumb{border-color:var(--theme)}}</style></noscript><script async src="https://www.googletagmanager.com/gtag/js?id=G-1C7VLVHN52"></script>
+<script>var doNotTrack=!1;if(!doNotTrack){window.dataLayer=window.dataLayer||[];function gtag(){dataLayer.push(arguments)}gtag("js",new Date),gtag("config","G-1C7VLVHN52",{anonymize_ip:!1})}</script><meta property="og:title" content="shebang - #!"><meta property="og:description" content="shell 脚本兼容性以及版本控制"><meta property="og:type" content="article"><meta property="og:url" content="https://fuweid.com/post/2017-shebang-compatibility-version/"><meta property="article:section" content="post"><meta property="article:published_time" content="2017-03-19T00:00:00+00:00"><meta property="article:modified_time" content="2017-03-19T00:00:00+00:00"><meta property="og:site_name" content="fuweid"><meta name=twitter:card content="summary"><meta name=twitter:title content="shebang - #!"><meta name=twitter:description content="shell 脚本兼容性以及版本控制"><script type=application/ld+json>{"@context":"https://schema.org","@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"Posts","item":"https://fuweid.com/post/"},{"@type":"ListItem","position":2,"name":"shebang - #!","item":"https://fuweid.com/post/2017-shebang-compatibility-version/"}]}</script><script type=application/ld+json>{"@context":"https://schema.org","@type":"BlogPosting","headline":"shebang - #!","name":"shebang - #!","description":"shell 脚本兼容性以及版本控制","keywords":[],"articleBody":"写脚本的时候通常会在脚本的开头加上 shebang, 系统会将这段内容作为解释器指令，比如 bash shell 脚本。\n$\u003e cat example #!/usr/bin/bash echo \"HaHa\" $\u003e chmod +x ./example $\u003e ./example HaHa 只要为脚本添加了可执行的属性，那么内核在执行脚本的时候，会调用 shebang 描述的解释器来执行脚本。 ./exmaple 其实等价于 /usr/bin/bash ./example。shebang 描述的解释器需要写其绝对路径或者相对路径，因为内核并不会在用户设置的 PATH 里找解释器。关于 shebang，讨论最多的应该是 兼容性 和 版本控制 问题。\n兼容性 Linux 和 Unix 在存放解释器的具体路径不太一致，比如 Linux 会放到 /usr/bin/ 中，而 openBSD 会放到 /usr/local/bin/ 中。不同包管理器在安装解释器的时候，存放的位置也不尽相同。 当你在 Mac 上写了 shell 脚本，测试并提交到代码库。 结果等到部署的那一天，执行脚本的时候发现找不到解释器了。 为了解决这个问题，可以通过 env 来解决，因为它在 Linux 和 Unix 存放的位置相同。\n$\u003e cat exmaple #!/usr/bin/env bash echo \"HaHa\" env 会在用户设置的 PATH 中查找解释器第一次出现的具体路径。 虽然办法比较 tricky，但是这种方式能解决脚本解释器的兼容性问题。\n版本控制 env 会在用户配置的 PATH 中查找解释器第一次出现的具体路径。 这个机制就说明这存在两个问题：\n不同用户配置的 PATH 内容不同，导致找到的解释器版本会出现不一致 很难通过 env 的方式来做到版本控制 所以有些人坚持不用 /usr/bin/env cmd 这种方式。\n思考 从部署的角度看，线上机器的环境都是一致的，而且都是通过自动化脚本去安装各种依赖。 版本控制较细，这种情况下，不太建议采用 env 这种方式。如果从开发者的角度看， 还是希望脚本能做到兼容，毕竟开发者的环境千差万别，env 基本上能解决这一大痛点。\n不用 env 这种方式，就得确保测试环境和线上机器是一致的，通常 Docker 和 虚拟机都能解决这样的问题。\n","wordCount":"102","inLanguage":"en","datePublished":"2017-03-19T00:00:00Z","dateModified":"2017-03-19T00:00:00Z","mainEntityOfPage":{"@type":"WebPage","@id":"https://fuweid.com/post/2017-shebang-compatibility-version/"},"publisher":{"@type":"Organization","name":"fuweid","logo":{"@type":"ImageObject","url":"https://fuweid.com/favicon.jpg"}}}</script></head><body id=top><script>localStorage.getItem("pref-theme")==="dark"?document.body.classList.add("dark"):localStorage.getItem("pref-theme")==="light"?document.body.classList.remove("dark"):window.matchMedia("(prefers-color-scheme: dark)").matches&&document.body.classList.add("dark")</script><header class=header><nav class=nav><div class=logo><a href=https://fuweid.com/ accesskey=h title="fuweid.com (Alt + H)">fuweid.com</a><div class=logo-switches><button id=theme-toggle accesskey=t title="(Alt + T)"><svg id="moon" xmlns="http://www.w3.org/2000/svg" width="24" height="18" viewBox="0 0 24 24" fill="none" stroke="currentcolor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1111.21 3 7 7 0 0021 12.79z"/></svg><svg id="sun" xmlns="http://www.w3.org/2000/svg" width="24" height="18" viewBox="0 0 24 24" fill="none" stroke="currentcolor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg></button></div></div><ul id=menu></ul></nav></header><main class=main><article class=post-single><header class=post-header><div class=breadcrumbs><a href=https://fuweid.com/>Home</a>&nbsp;»&nbsp;<a href=https://fuweid.com/post/>Posts</a></div><h1 class=post-title>shebang - #!</h1><div class=post-description>shell 脚本兼容性以及版本控制</div><div class=post-meta><span title='2017-03-19 00:00:00 +0000 UTC'>March 19, 2017</span></div></header><div class=post-content><p>写脚本的时候通常会在脚本的开头加上 <a href=https://en.wikipedia.org/wiki/Shebang_(Unix)>shebang</a>, 系统会将这段内容作为解释器指令，比如 bash shell 脚本。</p><div class=highlight><pre tabindex=0 class=chroma><code class=language-bash data-lang=bash><span class=line><span class=cl>$&gt; cat example
+</span></span><span class=line><span class=cl><span class=c1>#!/usr/bin/bash</span>
+</span></span><span class=line><span class=cl><span class=nb>echo</span> <span class=s2>&#34;HaHa&#34;</span>
+</span></span><span class=line><span class=cl>
+</span></span><span class=line><span class=cl>$&gt; chmod +x ./example
+</span></span><span class=line><span class=cl>
+</span></span><span class=line><span class=cl>$&gt; ./example
+</span></span><span class=line><span class=cl>HaHa
+</span></span></code></pre></div><p>只要为脚本添加了可执行的属性，那么内核在执行脚本的时候，会调用 shebang 描述的解释器来执行脚本。
+<code>./exmaple</code> 其实等价于 <code>/usr/bin/bash ./example</code>。shebang 描述的解释器需要写其绝对路径或者相对路径，因为内核并不会在用户设置的 <code>PATH</code> 里找解释器。关于 shebang，讨论最多的应该是 <strong>兼容性</strong> 和 <strong>版本控制</strong> 问题。</p><h3 id=兼容性>兼容性<a hidden class=anchor aria-hidden=true href=#兼容性>#</a></h3><p>Linux 和 Unix 在存放解释器的具体路径不太一致，比如 Linux 会放到 <code>/usr/bin/</code> 中，而 openBSD 会放到 <code>/usr/local/bin/</code> 中。不同包管理器在安装解释器的时候，存放的位置也不尽相同。
+当你在 Mac 上写了 shell 脚本，测试并提交到代码库。
 结果等到部署的那一天，执行脚本的时候发现找不到解释器了。
-为了解决这个问题，可以通过 <code>env</code> 来解决，因为它在 Linux 和 Unix 存放的位置相同。</p>
-<div class="highlight"><pre class="chroma"><code class="language-sh" data-lang="sh">$&gt; cat exmaple
-<span class="c1">#!/usr/bin/env bash</span>
-<span class="nb">echo</span> <span class="s2">&#34;HaHa&#34;</span>
-</code></pre></div><p><code>env</code> 会在用户设置的 <code>PATH</code> 中查找解释器第一次出现的具体路径。
-虽然办法比较 tricky，但是这种方式能解决脚本解释器的兼容性问题。</p>
-<h3 id="版本控制">版本控制</h3>
-<p><code>env</code> 会在用户配置的 <code>PATH</code> 中查找解释器第一次出现的具体路径。
-这个机制就说明这存在两个问题：</p>
-<ul>
-<li>不同用户配置的 <code>PATH</code> 内容不同，导致找到的解释器版本会出现不一致</li>
-<li>很难通过 <code>env</code> 的方式来做到版本控制</li>
-</ul>
-<p>所以有些人坚持不用 <code>/usr/bin/env cmd</code> 这种方式。</p>
-<h3 id="思考">思考</h3>
-<p>从部署的角度看，线上机器的环境都是一致的，而且都是通过自动化脚本去安装各种依赖。
+为了解决这个问题，可以通过 <code>env</code> 来解决，因为它在 Linux 和 Unix 存放的位置相同。</p><div class=highlight><pre tabindex=0 class=chroma><code class=language-sh data-lang=sh><span class=line><span class=cl>$&gt; cat exmaple
+</span></span><span class=line><span class=cl><span class=c1>#!/usr/bin/env bash</span>
+</span></span><span class=line><span class=cl><span class=nb>echo</span> <span class=s2>&#34;HaHa&#34;</span>
+</span></span></code></pre></div><p><code>env</code> 会在用户设置的 <code>PATH</code> 中查找解释器第一次出现的具体路径。
+虽然办法比较 tricky，但是这种方式能解决脚本解释器的兼容性问题。</p><h3 id=版本控制>版本控制<a hidden class=anchor aria-hidden=true href=#版本控制>#</a></h3><p><code>env</code> 会在用户配置的 <code>PATH</code> 中查找解释器第一次出现的具体路径。
+这个机制就说明这存在两个问题：</p><ul><li>不同用户配置的 <code>PATH</code> 内容不同，导致找到的解释器版本会出现不一致</li><li>很难通过 <code>env</code> 的方式来做到版本控制</li></ul><p>所以有些人坚持不用 <code>/usr/bin/env cmd</code> 这种方式。</p><h3 id=思考>思考<a hidden class=anchor aria-hidden=true href=#思考>#</a></h3><p>从部署的角度看，线上机器的环境都是一致的，而且都是通过自动化脚本去安装各种依赖。
 版本控制较细，这种情况下，不太建议采用 <code>env</code> 这种方式。如果从开发者的角度看，
-还是希望脚本能做到兼容，毕竟开发者的环境千差万别，<code>env</code>  基本上能解决这一大痛点。</p>
-<blockquote>
-<p>不用 <code>env</code> 这种方式，就得确保测试环境和线上机器是一致的，通常 Docker 和 虚拟机都能解决这样的问题。</p>
-</blockquote>
-
-            </article>
-        </div>
-
-        <footer>
-    &copy; 2022 Fu Wei
-</footer>
-
-<script>
-    function doPrettify(){
-        pres=document.getElementsByTagName('pre');
-        for (i=0; i < pres.length; i++) {
-            pres[i].className+=" prettyprint";
-        }
-        prettyPrint();
-    }
-</script>
-
-
-<script async src="https://www.googletagmanager.com/gtag/js?id=G-1C7VLVHN52"></script>
-<script>
-  window.dataLayer = window.dataLayer || [];
-  function gtag(){dataLayer.push(arguments);}
-  gtag('js', new Date());
-
-  gtag('config', 'G-1C7VLVHN52');
-</script>
-
-    </body>
-</html>
+还是希望脚本能做到兼容，毕竟开发者的环境千差万别，<code>env</code> 基本上能解决这一大痛点。</p><blockquote><p>不用 <code>env</code> 这种方式，就得确保测试环境和线上机器是一致的，通常 Docker 和 虚拟机都能解决这样的问题。</p></blockquote></div><footer class=post-footer><ul class=post-tags></ul><nav class=paginav><a class=prev href=https://fuweid.com/post/2017-control-your-shell-script/><span class=title>« Prev</span><br><span>让你的 shell 脚本变得可控</span></a>
+<a class=next href=https://fuweid.com/post/2017-netfilter-beginning/><span class=title>Next »</span><br><span>Netfilter 初探</span></a></nav></footer></article></main><footer class=footer><span>&copy; 2022 <a href=https://fuweid.com/>fuweid</a></span>
+<span>Powered by
+<a href=https://gohugo.io/ rel="noopener noreferrer" target=_blank>Hugo</a> &
+        <a href=https://github.com/adityatelange/hugo-PaperMod/ rel=noopener target=_blank>PaperMod</a></span></footer><a href=#top aria-label="go to top" title="Go to Top (Alt + G)" class=top-link id=top-link accesskey=g><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 12 6" fill="currentcolor"><path d="M12 6H0l6-6z"/></svg></a><script>let menu=document.getElementById("menu");menu&&(menu.scrollLeft=localStorage.getItem("menu-scroll-position"),menu.onscroll=function(){localStorage.setItem("menu-scroll-position",menu.scrollLeft)}),document.querySelectorAll('a[href^="#"]').forEach(e=>{e.addEventListener("click",function(e){e.preventDefault();var t=this.getAttribute("href").substr(1);window.matchMedia("(prefers-reduced-motion: reduce)").matches?document.querySelector(`[id='${decodeURIComponent(t)}']`).scrollIntoView():document.querySelector(`[id='${decodeURIComponent(t)}']`).scrollIntoView({behavior:"smooth"}),t==="top"?history.replaceState(null,null," "):history.pushState(null,null,`#${t}`)})})</script><script>var mybutton=document.getElementById("top-link");window.onscroll=function(){document.body.scrollTop>800||document.documentElement.scrollTop>800?(mybutton.style.visibility="visible",mybutton.style.opacity="1"):(mybutton.style.visibility="hidden",mybutton.style.opacity="0")}</script><script>document.getElementById("theme-toggle").addEventListener("click",()=>{document.body.className.includes("dark")?(document.body.classList.remove("dark"),localStorage.setItem("pref-theme","light")):(document.body.classList.add("dark"),localStorage.setItem("pref-theme","dark"))})</script><script>document.querySelectorAll("pre > code").forEach(e=>{const n=e.parentNode.parentNode,t=document.createElement("button");t.classList.add("copy-code"),t.innerHTML="copy";function s(){t.innerHTML="copied!",setTimeout(()=>{t.innerHTML="copy"},2e3)}t.addEventListener("click",t=>{if("clipboard"in navigator){navigator.clipboard.writeText(e.textContent),s();return}const n=document.createRange();n.selectNodeContents(e);const o=window.getSelection();o.removeAllRanges(),o.addRange(n);try{document.execCommand("copy"),s()}catch{}o.removeRange(n)}),n.classList.contains("highlight")?n.appendChild(t):n.parentNode.firstChild==n||(e.parentNode.parentNode.parentNode.parentNode.parentNode.nodeName=="TABLE"?e.parentNode.parentNode.parentNode.parentNode.parentNode.appendChild(t):e.parentNode.appendChild(t))})</script></body></html>
