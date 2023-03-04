@@ -5,7 +5,16 @@
     <link>https://fuweid.com/post/</link>
     <description>Recent content in Posts on fuweid</description>
     <generator>Hugo -- gohugo.io</generator>
-    <lastBuildDate>Sat, 15 Oct 2022 18:20:45 +0800</lastBuildDate><atom:link href="https://fuweid.com/post/index.xml" rel="self" type="application/rss+xml" />
+    <lastBuildDate>Sat, 04 Mar 2023 15:20:45 +0800</lastBuildDate><atom:link href="https://fuweid.com/post/index.xml" rel="self" type="application/rss+xml" />
+    <item>
+      <title>containerd 1.7: UserNamespace Stateless Pod</title>
+      <link>https://fuweid.com/post/2023-containerd-17-userns/</link>
+      <pubDate>Sat, 04 Mar 2023 15:20:45 +0800</pubDate>
+      
+      <guid>https://fuweid.com/post/2023-containerd-17-userns/</guid>
+      <description>Usernamespace 实验特性介绍</description>
+    </item>
+    
     <item>
       <title>使用 unshare(CLONE_FS) 来优化 OverlayFS 挂载</title>
       <link>https://fuweid.com/post/2022-go-unshare-clonefs/</link>
