@@ -5,7 +5,16 @@
     <link>https://fuweid.com/post/</link>
     <description>Recent content in Posts on fuweid</description>
     <generator>Hugo -- gohugo.io</generator>
-    <lastBuildDate>Mon, 13 Mar 2023 01:20:45 +0800</lastBuildDate><atom:link href="https://fuweid.com/post/index.xml" rel="self" type="application/rss+xml" />
+    <lastBuildDate>Sun, 19 Mar 2023 19:48:45 +0800</lastBuildDate><atom:link href="https://fuweid.com/post/index.xml" rel="self" type="application/rss+xml" />
+    <item>
+      <title>containerd 1.7: 垃圾回收的拓展</title>
+      <link>https://fuweid.com/post/2023-containerd-17-gc/</link>
+      <pubDate>Sun, 19 Mar 2023 19:48:45 +0800</pubDate>
+      
+      <guid>https://fuweid.com/post/2023-containerd-17-gc/</guid>
+      <description>主要介绍下 containerd 垃圾回收机制</description>
+    </item>
+    
     <item>
       <title>containerd 1.7: Image Transfer Service</title>
       <link>https://fuweid.com/post/2023-containerd-17-transfer-service/</link>
