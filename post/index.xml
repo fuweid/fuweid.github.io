@@ -5,14 +5,13 @@
     <link>https://fuweid.com/post/</link>
     <description>Recent content in Posts on fuweid</description>
     <generator>Hugo -- gohugo.io</generator>
-    <language>en</language>
     <lastBuildDate>Thu, 11 Apr 2024 20:48:45 +0800</lastBuildDate><atom:link href="https://fuweid.com/post/index.xml" rel="self" type="application/rss+xml" />
     <item>
       <title>脏页大小 - 18446744073709551614 ?!</title>
-      <link>https://fuweid.com/post/2024-dirtypage--2/</link>
+      <link>https://fuweid.com/post/2024-dirtypage-2/</link>
       <pubDate>Thu, 11 Apr 2024 20:48:45 +0800</pubDate>
       
-      <guid>https://fuweid.com/post/2024-dirtypage--2/</guid>
+      <guid>https://fuweid.com/post/2024-dirtypage-2/</guid>
       <description>etcd-io/etcd#17615</description>
     </item>
     
@@ -109,7 +108,7 @@
     <item>
       <title>可以同时对一个 go string 进行读写操作吗？</title>
       <link>https://fuweid.com/post/2020-go-string-data-race/</link>
-      <pubDate>Sat, 30 May 2020 00:00:00 +0000</pubDate>
+      <pubDate>Sat, 30 May 2020 00:00:00 +0800</pubDate>
       
       <guid>https://fuweid.com/post/2020-go-string-data-race/</guid>
       <description>panic or not?</description>
@@ -118,7 +117,7 @@
     <item>
       <title>在线看 O&#39;Reilly 动物新书指南</title>
       <link>https://fuweid.com/post/2020-digital-book-from-safari/</link>
-      <pubDate>Sat, 21 Mar 2020 00:00:00 +0000</pubDate>
+      <pubDate>Sat, 21 Mar 2020 00:00:00 +0800</pubDate>
       
       <guid>https://fuweid.com/post/2020-digital-book-from-safari/</guid>
       <description>O&amp;#39;Reilly Online Books 另外一种打开方式</description>
@@ -145,7 +144,7 @@
     <item>
       <title>Goroutine Scheduler Overview</title>
       <link>https://fuweid.com/post/2018-goroutine-scheduler-overview/</link>
-      <pubDate>Tue, 06 Feb 2018 00:00:00 +0000</pubDate>
+      <pubDate>Tue, 06 Feb 2018 00:00:00 +0800</pubDate>
       
       <guid>https://fuweid.com/post/2018-goroutine-scheduler-overview/</guid>
       <description>基于 go1.9rc2 版本分析 go 调度细节</description>
@@ -172,7 +171,7 @@
     <item>
       <title>让你的 shell 脚本变得可控</title>
       <link>https://fuweid.com/post/2017-control-your-shell-script/</link>
-      <pubDate>Mon, 20 Mar 2017 00:00:00 +0000</pubDate>
+      <pubDate>Mon, 20 Mar 2017 00:00:00 +0800</pubDate>
       
       <guid>https://fuweid.com/post/2017-control-your-shell-script/</guid>
       <description>set -euo pipefail 让 shell 脚本变得可控</description>
@@ -181,7 +180,7 @@
     <item>
       <title>shebang - #!</title>
       <link>https://fuweid.com/post/2017-shebang-compatibility-version/</link>
-      <pubDate>Sun, 19 Mar 2017 00:00:00 +0000</pubDate>
+      <pubDate>Sun, 19 Mar 2017 00:00:00 +0800</pubDate>
       
       <guid>https://fuweid.com/post/2017-shebang-compatibility-version/</guid>
       <description>shell 脚本兼容性以及版本控制</description>
@@ -190,7 +189,7 @@
     <item>
       <title>Netfilter 初探</title>
       <link>https://fuweid.com/post/2017-netfilter-beginning/</link>
-      <pubDate>Fri, 17 Mar 2017 00:00:00 +0000</pubDate>
+      <pubDate>Fri, 17 Mar 2017 00:00:00 +0800</pubDate>
       
       <guid>https://fuweid.com/post/2017-netfilter-beginning/</guid>
       <description>简单介绍 Netfilter 模块以及 iptables 的使用</description>
