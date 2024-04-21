@@ -1,49 +1,118 @@
-<!doctype html><html lang=en dir=auto><head><meta charset=utf-8><meta http-equiv=x-ua-compatible content="IE=edge"><meta name=viewport content="width=device-width,initial-scale=1,shrink-to-fit=no"><meta name=robots content="index, follow"><title>Go Interface & Duck Typing | fuweid</title><meta name=keywords content><meta name=description content="基于 go1.7rc6 版本分析 go interface 设计细节"><meta name=author content><link rel=canonical href=https://fuweid.com/post/2017-go-interface-duck-typing/><link crossorigin=anonymous href=/assets/css/stylesheet.abc7c82c3d415a6df50430738d1cbcc4c76fea558bc5a0c830d3babf78167a35.css integrity="sha256-q8fILD1BWm31BDBzjRy8xMdv6lWLxaDIMNO6v3gWejU=" rel="preload stylesheet" as=style><script defer crossorigin=anonymous src=/assets/js/highlight.f413e19d0714851f6474e7ee9632408e58ac146fbdbe62747134bea2fa3415e0.js integrity="sha256-9BPhnQcUhR9kdOfuljJAjlisFG+9vmJ0cTS+ovo0FeA=" onload=hljs.initHighlightingOnLoad();></script><link rel=icon href=https://fuweid.com/favicon.jpg><link rel=icon type=image/png sizes=16x16 href=https://fuweid.com/favicon-16x16.png><link rel=icon type=image/png sizes=32x32 href=https://fuweid.com/favicon-32x32.png><link rel=apple-touch-icon href=https://fuweid.com/apple-touch-icon.png><link rel=mask-icon href=https://fuweid.com/safari-pinned-tab.svg><meta name=theme-color content="#2e2e33"><meta name=msapplication-TileColor content="#2e2e33"><noscript><style>#theme-toggle,.top-link{display:none}</style><style>@media(prefers-color-scheme:dark){:root{--theme: rgb(29, 30, 32);--entry: rgb(46, 46, 51);--primary: rgb(218, 218, 219);--secondary: rgb(155, 156, 157);--tertiary: rgb(65, 66, 68);--content: rgb(196, 196, 197);--hljs-bg: rgb(46, 46, 51);--code-bg: rgb(55, 56, 62);--border: rgb(51, 51, 51)}.list{background:var(--theme)}.list:not(.dark)::-webkit-scrollbar-track{background:0 0}.list:not(.dark)::-webkit-scrollbar-thumb{border-color:var(--theme)}}</style></noscript><script type=application/javascript>var doNotTrack=false;if(!doNotTrack){(function(i,s,o,g,r,a,m){i['GoogleAnalyticsObject']=r;i[r]=i[r]||function(){(i[r].q=i[r].q||[]).push(arguments)},i[r].l=1*new Date();a=s.createElement(o),m=s.getElementsByTagName(o)[0];a.async=1;a.src=g;m.parentNode.insertBefore(a,m)})(window,document,'script','https://www.google-analytics.com/analytics.js','ga');ga('create','G-1C7VLVHN52','auto');ga('send','pageview');}</script><meta property="og:title" content="Go Interface & Duck Typing"><meta property="og:description" content="基于 go1.7rc6 版本分析 go interface 设计细节"><meta property="og:type" content="article"><meta property="og:url" content="https://fuweid.com/post/2017-go-interface-duck-typing/"><meta property="article:section" content="post"><meta property="article:published_time" content="2017-06-05T00:00:00+00:00"><meta property="article:modified_time" content="2017-06-05T00:00:00+00:00"><meta property="og:site_name" content="fuweid"><meta name=twitter:card content="summary"><meta name=twitter:title content="Go Interface & Duck Typing"><meta name=twitter:description content="基于 go1.7rc6 版本分析 go interface 设计细节"><script type=application/ld+json>{"@context":"https://schema.org","@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"Posts","item":"https://fuweid.com/post/"},{"@type":"ListItem","position":2,"name":"Go Interface \u0026 Duck Typing","item":"https://fuweid.com/post/2017-go-interface-duck-typing/"}]}</script><script type=application/ld+json>{"@context":"https://schema.org","@type":"BlogPosting","headline":"Go Interface \u0026 Duck Typing","name":"Go Interface \u0026 Duck Typing","description":"基于 go1.7rc6 版本分析 go interface 设计细节","keywords":[],"articleBody":"Go 不需要像 Java 那样显式地使用 implement 说明某一数据类型实现了 interface，只要某一数据类型实现了 interface 所定义的方法名签，那么就称该数据类型实现了 interface。interface 的语言特性可以容易地做到接口定义和具体实现解耦分离，并将注意力转移到如何使用 interface ，而不是方法的具体实现，我们也称这种程序设计为 Duck Typing。文本将描述 Go 是如何通过 interface 来实现 Duck Typing。\n 本文提供的源代码都是基于 go1.7rc6 版本。\n 1. Duck Typing 了解实现原理之前，我们可以简单过一下 Go 的 Duck Typing 示例。\npackage main type Ducker interface { Quack() } type Duck struct {} func (_ Duck) Quack() { println(\"Quaaaaaack!\") } type Person struct {} func (_ Person) Quack() { println(\"Aha?!\") } func inTheForest(d Ducker) { d.Quack() } func main() { inTheForest(Duck{}) inTheForest(Person{}) } // result: // Quaaaaaack! // Aha?! 在示例中，inTheForest 函数使用了 Ducker 的 Quack() 方法，而 Quack() 方法的具体实现由实参所决定。根据 Go interface 的定义，Duck 和 Person 两种数据类型都有 Quack() 方法，说明这两种数据类型都实现了 Ducker 。当实参分别为这两种类型的数据时，inTheForest 函数表现出『多态』。\n在这没有继承关系的情况下，Go 可以通过 interface 的 Duck Typing 特性来实现『多态』。作为一个静态语言，Go 是如何实现 Duck Typing 这一特性？\n2. interface data structure interface 是 Go 数据类型系统中的一员。在分析运行机制之前，有必要先了解 interface 的数据结构。\n2.1 empty interface // src/runtime/runtime2.go type eface struct { _type *_type data unsafe.Pointer } 当一个 interface 没有定义方法签名时，那么我们称之为 empty interface。它由 _type 和 data 组成，其中 data 表示 interface 具体实现的数据，而 _type 是 data 对应数据的类型元数据。因为没有定义方法签名，所以任何类型都『实现』empty interface。换句话来说，empty interface 可以接纳任何类型的数据。\npackage main func main() { i := 1 var eface interface{} = i println(eface) } // gdb info // (gdb) i locals // i = 1 // eface = { // _type = 0x55ec0 , // data = 0xc420045f18 // } // (gdb) x/x eface.data // 0xc420045f18: 0x00000001 // (gdb) x/x \u0026i // 0xc420045f10: 0x00000001 在使用 gdb 来查看 eface 数据结构的过程中，我们会发现比较特别的一点：eface.data 和 i 的地址不同。一般情况下，将一个数据赋值给 interface 时，程序会为数据生成一份副本，并将副本的地址赋给 data 。\n// src/cmd/compile/internal/gc/subr.go // Can this type be stored directly in an interface word? // Yes, if the representation is a single pointer. func isdirectiface(t *Type) bool { switch t.Etype { case TPTR32, TPTR64, TCHAN, TMAP, TFUNC, TUNSAFEPTR: return true case TARRAY: // Array of 1 direct iface type can be direct. return t.NumElem() == 1 \u0026\u0026 isdirectiface(t.Elem()) case TSTRUCT: // Struct with 1 field of direct iface type can be direct. return t.NumFields() == 1 \u0026\u0026 isdirectiface(t.Field(0).Type) } return false } 当一个数据的类型符合 isdirectiface 的判定时，那么程序不会生成副本，而是直接将实际地址赋给 data 。由于这部分内存分配优化和 reflect 实现有关，在此就不做展开描述了。\n reflect 要想在运行时解析数据的方法和属性，它就需要知道数据以及类型元数据。而 empty interface 正好能满足这一需求，这也正是 reflect 的核心方法 ValueOf 和 TypeOf 的形参是 empty interface 的原因。\n 在 Duck Typing 的使用上，empty interface 使用频率比较高的场景是 Type Switch, Type Assertion，接下来会介绍这些使用场景。\n2.2 non-empty interface 相对于 empty interface 而言，有方法签名的 interface 的数据结构要复杂一些。\n// src/runtime/runtime2.go type iface struct { tab *itab data unsafe.Pointer } type itab struct { inter *interfacetype _type *_type link *itab bad int32 unused int32 fun [1]uintptr // variable sized } iface 包含两个字段 tab 和 data。和 empty interface 一样，data 表示具体实现的数据。tab 不再是简单的 _type，不仅维护了（interfacetype，_type）匹配的信息，还维护了具体方法实现的列表入口 fun。\n 其中 interfacetype 是相应 interface 类型的元数据。 而 fun 字段是一个变长数组的 header ，它代表着具体方法数组的头指针，程序通过fun去定位具体某一方法实现。\n 来看看下面这一段程序。\npackage main type Ducker interface { Quack() Feathers() } type Duck struct{ x int } func (_ Duck) Quack() { println(\"Quaaaaaack!\") } func (_ Duck) Feathers() { println(\"The duck has white and gray feathers.\") } func inTheForest(d Ducker) { d.Quack() d.Feathers() } func main() { inTheForest(Duck{x: 1}) } // gdb info at func inTheForest (gdb) p d $2 = { tab = 0x97100 Duck,main.Ducker, data = 0xc42000a118 } (gdb) x/2xg d.tab.fun 0x97120 go.itab.main.Duck,main.Ducker+32: 0x00000000000022f0 0x0000000000002230 (gdb) i symbol 0x00000000000022f0 main.(*Duck).Feathers in section .text (gdb) i symbol 0x0000000000002230 main.(*Duck).Quack in section .text 在 inTheForest 函数里，d.tab.fun 数组包含了 Duck 的 Quack 以及 Feathers 的方法地址，因此在 d.Quack() 和 d.Feathers() 分别使用了 Duck 的 Quack 和 Feathers 方法的具体实现。假如这个时候，传入的不是 Duck ，而是其他实现了 Ducker 的数据类型，那么 d.tab.fun 将会包含相应类型的具体方法实现。\n d.tab.fun 不会包含 interface 定义以外的方法地址。\n 不难发现，itab.fun 包含了具体方法的实现，程序在运行时通过 itab.fun 来决议具体方法的调用，这也是实现 Duck Typing 的核心逻辑。那么问题来了，itab 是什么时候生成的？\n3. itab 当数据类型 Duck 实现了 Ducker 中的所有方法时，编译器才会生成 itab，并将 Duck 对 Ducker 的具体实现绑定到 itab.fun 上，否则编译不通过。itab.fun 很像 C++ 中的虚函数表。而 Go 没有继承关系，一个 interface 就可能会对应 N 种可能的具体实现，这种 M:N 的情况太多，没有必要去为所有可能的结果生成 itab。因此，编译器只会生成部分 itab，剩下的将会在运行时生成。\n C++ 通过继承关系，在编译期间就生成类的虚函数表。在运行状态下，通过指针来查看虚函数表来定位具体方法实现。\n 当一个数据类型实现 interface 中所声明的所有方法签名，那么 iface 就可以携带该数据类型对 interface 的具体实现，否则将会 panic 。这部分判定需要 _type 和 interfacetype 元数据，而这部分数据在编译器已经为运行时准备好了，那么判定和生成 itab 就只要照搬编译器里那一套逻辑即可。\n// src/runtime/iface.go var ( ifaceLock mutex // lock for accessing hash hash [hashSize]*itab ) func itabhash(inter *interfacetype, typ *_type) uint32 {...} func getitab(inter *interfacetype, typ *_type, canfail bool) *itab {...} func additab(m *itab, locked, canfail bool) {...} // src/runtime/runtime2.go type itab struct { inter *interfacetype _type *_type link *itab bad int32 unused int32 fun [1]uintptr // variable sized } 为了保证运行效率，程序会在运行时会维护全局的 itab hash 表，getitab 会在全局 hash 表中查找相应的 itab。当 getitab 发现没有相应的 itab 时，它会调用 additab 来添加新的 itab。在插入新的 itab 之前，additab 会验证 _type 对应的类型是否都实现了 interfacetype 声明的方法集合。\n 运行时通过 itabhash 负责生成 hash 值，并使用单链表来解决冲突问题，其中 itab.link 可用来实现链表。\n 那么问题又来了，_type 有 N 个方法，interfacetype 有 M 个方法签名，验证匹配的最坏可能性就是需要 N * M 次遍历。除此之外，additab 在写之前需要加锁，这两方面都会影响性能。\n3.1 additab 的效率问题 为了减少验证的时间，编译期间会对方法名进行排序，这样最坏的可能也就需要 N + M 次遍历即可。\n 细心的朋友可能会发现，在上一个例子中 d.tab.fun 中的方法是按照字符串大小排序的。\n // src/runtime/iface.go func additab(m *itab, locked, canfail bool) { inter := m.inter typ := m._type x := typ.uncommon() // both inter and typ have method sorted by name, // and interface names are unique, // so can iterate over both in lock step; // the loop is O(ni+nt) not O(ni*nt). ... } 3.2 锁的效率问题 关于锁的问题，在实现 getitab 的时候，引入了两轮查询的策略。因为 itab 数据比较稳定，引入两轮查询可以减少锁带来的影响。\n// src/runtime/iface.go func getitab(inter *interfacetype, typ *_type, canfail bool) *itab { .... // look twice - once without lock, once with. // common case will be no lock contention. var m *itab var locked int for locked = 0; locked itab 的生成和查询或多或少带有运行时的开销。然而 itab 不仅提供了静态语言的类型检查，还提供了动态语言的灵活特性。只要不滥用 interface，itab 还是可以提供不错的编程体验。\n4. Type Switch \u0026 Type Assertion 开发者会使用 interface 的 Type Switch 和 Type Assertion 来进行『类型转化』。\npackage main type Ducker interface { Feathers() } type Personer interface { Feathers() } type Duck struct{} func (_ Duck) Feathers() { /* do nothing */ } func example(e interface{}) { if _, ok := e.(Personer); ok { println(\"I'm Personer\") } if _, ok := e.(Ducker); ok { println(\"I'm Ducker\") } } func main() { var d Ducker = Duck{} example(d) } // result: // I'm Personer // I'm Ducker 根据之前对 itab 的分析，其实 e.(Personer) 和 e.(Ducker) 这两个断言做的就是切换 itab.inter 和 itab.fun ，并不是动态语言里的『类型转化』。那么断言的函数入口在哪？\n// go tool objdump -s 'main.example' ./main main.go:15 0x2050 65488b0c25a0080000 GS MOVQ GS:0x8a0, CX main.go:15 0x2059 483b6110 CMPQ 0x10(CX), SP main.go:15 0x205d 0f86eb000000 JBE 0x214e main.go:15 0x2063 4883ec38 SUBQ $0x38, SP main.go:15 0x2067 48896c2430 MOVQ BP, 0x30(SP) main.go:15 0x206c 488d6c2430 LEAQ 0x30(SP), BP main.go:16 0x2071 488d05c8840500 LEAQ 0x584c8(IP), AX main.go:16 0x2078 48890424 MOVQ AX, 0(SP) main.go:16 0x207c 488b442448 MOVQ 0x48(SP), AX main.go:16 0x2081 488b4c2440 MOVQ 0x40(SP), CX main.go:16 0x2086 48894c2408 MOVQ CX, 0x8(SP) main.go:16 0x208b 4889442410 MOVQ AX, 0x10(SP) main.go:16 0x2090 48c744241800000000 MOVQ $0x0, 0x18(SP) = main.go:16 0x2099 e892840000 CALL runtime.assertE2I2(SB) main.go:16 0x209e 0fb6442420 MOVZX 0x20(SP), AX main.go:16 0x20a3 8844242f MOVB AL, 0x2f(SP) 通过 objdump 发现一个很特别的方法：runtime.assertE2I2。assertE2I2 是一个断言函数，它负责判断一个 empty interface 里的数据能否转化成一个 non-empty interface，名字最后那个 2 代表着有两个返回值：\n 第一参数是转化后的结果 第二参数是断言结果  接下来看看 assertE2I2 的源码。\n// src/runtime/iface.go func assertE2I2(inter *interfacetype, e eface, r *iface) bool { if testingAssertE2I2GC { GC() } t := e._type if t == nil { if r != nil { *r = iface{} } return false } tab := getitab(inter, t, true) if tab == nil { if r != nil { *r = iface{} } return false } if r != nil { r.tab = tab r.data = e.data } return true } 该函数会拿出 empty interface 中的 _type 和 interfacetype 在 getitab 中做查询和匹配验证。如果验证通过，r 会携带转化后的结果，并返回 true。否则返回 false。\nsrc/runtime/iface.go 中还有很多类似 assertE2I2 的函数，在这里就不一一阐述了。\n// T: 具体的数据类型_type // E: empty interface // I: non-empty interface // src/runtime/iface.go func assertE2I(inter *interfacetype, e eface, r *iface) {...} func assertI2I2(inter *interfacetype, i iface, r *iface) bool {..} func assertI2E(inter *interfacetype, i iface, r *eface) {...} func assertI2E2(inter *interfacetype, i iface, r *eface) bool {...} func assertE2T2(t *_type, e eface, r unsafe.Pointer) bool {..} func assertE2T(t *_type, e eface, r unsafe.Pointer) {..} func assertI2T2(t *_type, i iface, r unsafe.Pointer) bool {...} func assertI2T(t *_type, i iface, r unsafe.Pointer) {...} func convI2I(inter *interfacetype, i iface) (r iface) {...} func convI2E(i iface) (r eface) {...} 5. 最后 interface 的 Duck Typing 可以用来实现『多态』、代码的模块化。但是这毕竟有运行时的开销，interface 的滥用和声明大量的方法签名还是会影响到性能。\n6. Reference  Duke Typing C++ 虚函数表解析 Go Data Structures: Interfaces  ","wordCount":"1219","inLanguage":"en","datePublished":"2017-06-05T00:00:00Z","dateModified":"2017-06-05T00:00:00Z","mainEntityOfPage":{"@type":"WebPage","@id":"https://fuweid.com/post/2017-go-interface-duck-typing/"},"publisher":{"@type":"Organization","name":"fuweid","logo":{"@type":"ImageObject","url":"https://fuweid.com/favicon.jpg"}}}</script></head><body id=top><script>if(localStorage.getItem("pref-theme")==="dark"){document.body.classList.add('dark');}else if(localStorage.getItem("pref-theme")==="light"){document.body.classList.remove('dark')}else if(window.matchMedia('(prefers-color-scheme: dark)').matches){document.body.classList.add('dark');}</script><header class=header><nav class=nav><div class=logo><a href=https://fuweid.com/ accesskey=h title="fuweid.com (Alt + H)">fuweid.com</a><div class=logo-switches><button id=theme-toggle accesskey=t title="(Alt + T)"><svg id="moon" xmlns="http://www.w3.org/2000/svg" width="24" height="18" viewBox="0 0 24 24" fill="none" stroke="currentcolor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1111.21 3 7 7 0 0021 12.79z"/></svg><svg id="sun" xmlns="http://www.w3.org/2000/svg" width="24" height="18" viewBox="0 0 24 24" fill="none" stroke="currentcolor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg></button></div></div><ul id=menu></ul></nav></header><main class=main><article class=post-single><header class=post-header><div class=breadcrumbs><a href=https://fuweid.com/>Home</a>&nbsp;»&nbsp;<a href=https://fuweid.com/post/>Posts</a></div><h1 class=post-title>Go Interface & Duck Typing</h1><div class=post-description>基于 go1.7rc6 版本分析 go interface 设计细节</div><div class=post-meta><span title="2017-06-05 00:00:00 +0000 UTC">June 5, 2017</span></div></header><div class=post-content><p>Go 不需要像 Java 那样显式地使用 <strong>implement</strong> 说明某一数据类型实现了 interface，只要某一数据类型实现了 interface 所定义的方法名签，那么就称该数据类型实现了 interface。interface 的语言特性可以容易地做到接口定义和具体实现解耦分离，并将注意力转移到如何使用 interface ，而不是方法的具体实现，我们也称这种程序设计为 Duck Typing。文本将描述 Go 是如何通过 interface 来实现 Duck Typing。</p><blockquote><p>本文提供的源代码都是基于 go1.7rc6 版本。</p></blockquote><h3 id=1-duck-typing>1. Duck Typing<a hidden class=anchor aria-hidden=true href=#1-duck-typing>#</a></h3><p>了解实现原理之前，我们可以简单过一下 Go 的 Duck Typing 示例。</p><div class=highlight><pre class=chroma><code class=language-go data-lang=go><span class=kn>package</span> <span class=nx>main</span>
+<!DOCTYPE html>
+<html>
+    <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
 
-<span class=kd>type</span> <span class=nx>Ducker</span> <span class=kd>interface</span> <span class=p>{</span> <span class=nf>Quack</span><span class=p>()</span> <span class=p>}</span>
+    <title>
+        
+            Fu, Wei: Go Interface &amp; Duck Typing
+        
+    </title>
 
-<span class=kd>type</span> <span class=nx>Duck</span> <span class=kd>struct</span> <span class=p>{}</span>
-<span class=kd>func</span> <span class=p>(</span><span class=nx>_</span> <span class=nx>Duck</span><span class=p>)</span> <span class=nf>Quack</span><span class=p>()</span> <span class=p>{</span> <span class=nb>println</span><span class=p>(</span><span class=s>&#34;Quaaaaaack!&#34;</span><span class=p>)</span> <span class=p>}</span>
+    <meta property="og:title" content="Go Interface &amp; Duck Typing"/>
+    <meta property="og:Section" content="website"/>
+    <meta property="og:url" content="https://fuweid.com/post/2017-go-interface-duck-typing/"/>
+    <meta property="og:image" content="https://fuweid.com/favicon.jpg"/>
+    <meta property="og:site_name" content="Fu, Wei"/>
+    <meta property="og:description" content="基于 go1.7rc6 版本分析 go interface 设计细节"/>
 
-<span class=kd>type</span> <span class=nx>Person</span> <span class=kd>struct</span> <span class=p>{}</span> 
-<span class=kd>func</span> <span class=p>(</span><span class=nx>_</span> <span class=nx>Person</span><span class=p>)</span> <span class=nf>Quack</span><span class=p>()</span> <span class=p>{</span> <span class=nb>println</span><span class=p>(</span><span class=s>&#34;Aha?!&#34;</span><span class=p>)</span> <span class=p>}</span>
+    <link rel="stylesheet" href="/css/fontawesome/all.css" />
+    <link rel="stylesheet" href="/css/main.css" /> 
+    <link rel="stylesheet" href="/css/normalize.css">
+    <link rel="stylesheet" href="/css/prettify.css">
+    <link rel="shortcut icon" href="https://fuweid.com/favicon.jpg">
+    <link rel="icon" href="https://fuweid.com/favicon.jpg">
+    <script type="text/javascript" src="/js/prettify.js"></script>
+</head>
 
-<span class=kd>func</span> <span class=nf>inTheForest</span><span class=p>(</span><span class=nx>d</span> <span class=nx>Ducker</span><span class=p>)</span> <span class=p>{</span> <span class=nx>d</span><span class=p>.</span><span class=nf>Quack</span><span class=p>()</span> <span class=p>}</span>
 
-<span class=kd>func</span> <span class=nf>main</span><span class=p>()</span> <span class=p>{</span>
-	<span class=nf>inTheForest</span><span class=p>(</span><span class=nx>Duck</span><span class=p>{})</span>
-	<span class=nf>inTheForest</span><span class=p>(</span><span class=nx>Person</span><span class=p>{})</span>
-<span class=p>}</span>
+    <body onload="doPrettify()">
+        <header>
+    <nav>
+        <ul class="home">
+            <li>
+                <a href="https://fuweid.com/">Fu, Wei</a>
+            </li>
+        </ul>
+        <ul class="social">
+            <li>
+                <a class="fab fa-github" href="https://github.com/fuweid" target="_blank"></a>
+            </li>
+            <li>
+                <a class="fab fa-twitter" href="https://twitter.com/fuweid89" target="_blank"></a>
+            </li>
+            <li>
+                <a class="fas fa-rss" href="https://fuweid.com//index.xml" target="_blank"></a>
+            </li>
+        </ul>
+    </nav>
+</header>
 
-<span class=c1>// result:
-</span><span class=c1>// Quaaaaaack!
-</span><span class=c1>// Aha?!
-</span></code></pre></div><p>在示例中，<code>inTheForest</code> 函数使用了 <code>Ducker</code> 的 <code>Quack()</code> 方法，而 <code>Quack()</code> 方法的具体实现由实参所决定。根据 Go interface 的定义，<code>Duck</code> 和 <code>Person</code> 两种数据类型都有 <code>Quack()</code> 方法，说明这两种数据类型都实现了 <code>Ducker</code> 。当实参分别为这两种类型的数据时，<code>inTheForest</code> 函数表现出『多态』。</p><p>在这没有继承关系的情况下，Go 可以通过 interface 的 Duck Typing 特性来实现『多态』。作为一个静态语言，Go 是如何实现 Duck Typing 这一特性？</p><h3 id=2-interface-data-structure>2. interface data structure<a hidden class=anchor aria-hidden=true href=#2-interface-data-structure>#</a></h3><p>interface 是 Go 数据类型系统中的一员。在分析运行机制之前，有必要先了解 interface 的数据结构。</p><h4 id=21-empty-interface>2.1 empty interface<a hidden class=anchor aria-hidden=true href=#21-empty-interface>#</a></h4><div class=highlight><pre class=chroma><code class=language-fallback data-lang=fallback>// src/runtime/runtime2.go
+
+        <div class="container">
+            <article class="single">
+                <h1 class="title"> Go Interface &amp; Duck Typing </h1>
+                <h4 class="time"> June 5, 2017 </h4>
+                <p>Go 不需要像 Java 那样显式地使用 <strong>implement</strong> 说明某一数据类型实现了 interface，只要某一数据类型实现了 interface 所定义的方法名签，那么就称该数据类型实现了 interface。interface 的语言特性可以容易地做到接口定义和具体实现解耦分离，并将注意力转移到如何使用 interface ，而不是方法的具体实现，我们也称这种程序设计为 Duck Typing。文本将描述 Go 是如何通过 interface 来实现 Duck Typing。</p>
+<blockquote>
+<p>本文提供的源代码都是基于 go1.7rc6 版本。</p>
+</blockquote>
+<h3 id="1-duck-typing">1. Duck Typing</h3>
+<p>了解实现原理之前，我们可以简单过一下 Go 的 Duck Typing 示例。</p>
+<pre><code>package main
+
+type Ducker interface { Quack() }
+
+type Duck struct {}
+func (_ Duck) Quack() { println(&quot;Quaaaaaack!&quot;) }
+
+type Person struct {} 
+func (_ Person) Quack() { println(&quot;Aha?!&quot;) }
+
+func inTheForest(d Ducker) { d.Quack() }
+
+func main() {
+	inTheForest(Duck{})
+	inTheForest(Person{})
+}
+
+// result:
+// Quaaaaaack!
+// Aha?!
+</code></pre><p>在示例中，<code>inTheForest</code> 函数使用了 <code>Ducker</code> 的 <code>Quack()</code> 方法，而 <code>Quack()</code> 方法的具体实现由实参所决定。根据 Go interface 的定义，<code>Duck</code> 和 <code>Person</code> 两种数据类型都有 <code>Quack()</code> 方法，说明这两种数据类型都实现了 <code>Ducker</code> 。当实参分别为这两种类型的数据时，<code>inTheForest</code> 函数表现出『多态』。</p>
+<p>在这没有继承关系的情况下，Go 可以通过 interface 的 Duck Typing 特性来实现『多态』。作为一个静态语言，Go 是如何实现 Duck Typing 这一特性？</p>
+<h3 id="2-interface-data-structure">2. interface data structure</h3>
+<p>interface 是 Go 数据类型系统中的一员。在分析运行机制之前，有必要先了解 interface 的数据结构。</p>
+<h4 id="21-empty-interface">2.1 empty interface</h4>
+<pre><code>// src/runtime/runtime2.go
 type eface struct {
     _type *_type
     data  unsafe.Pointer
 }
-</code></pre></div><p>当一个 interface 没有定义方法签名时，那么我们称之为 empty interface。它由 <code>_type</code> 和 <code>data</code> 组成，其中 <code>data</code> 表示 interface 具体实现的数据，而 <code>_type</code> 是 <code>data</code> 对应数据的类型元数据。因为没有定义方法签名，所以任何类型都『实现』empty interface。换句话来说，empty interface 可以接纳任何类型的数据。</p><div class=highlight><pre class=chroma><code class=language-go data-lang=go><span class=kn>package</span> <span class=nx>main</span>
+</code></pre><p>当一个 interface 没有定义方法签名时，那么我们称之为 empty interface。它由 <code>_type</code> 和 <code>data</code> 组成，其中 <code>data</code> 表示 interface 具体实现的数据，而 <code>_type</code> 是 <code>data</code> 对应数据的类型元数据。因为没有定义方法签名，所以任何类型都『实现』empty interface。换句话来说，empty interface 可以接纳任何类型的数据。</p>
+<pre><code>package main
 
-<span class=kd>func</span> <span class=nf>main</span><span class=p>()</span> <span class=p>{</span>
-    <span class=nx>i</span> <span class=o>:=</span> <span class=mi>1</span>
-    <span class=kd>var</span> <span class=nx>eface</span> <span class=kd>interface</span><span class=p>{}</span> <span class=p>=</span> <span class=nx>i</span>
+func main() {
+    i := 1
+    var eface interface{} = i
     
-    <span class=nb>println</span><span class=p>(</span><span class=nx>eface</span><span class=p>)</span>
-<span class=p>}</span>
+    println(eface)
+}
 
-<span class=c1>// gdb info
-</span><span class=c1>// (gdb) i locals
-</span><span class=c1>// i = 1
-</span><span class=c1>// eface = {
-</span><span class=c1>//   _type = 0x55ec0 &lt;type.*+36000&gt;,
-</span><span class=c1>//   data = 0xc420045f18
-</span><span class=c1>// }
-</span><span class=c1>// (gdb) x/x eface.data
-</span><span class=c1>// 0xc420045f18:   0x00000001
-</span><span class=c1>// (gdb) x/x &amp;i
-</span><span class=c1>// 0xc420045f10:   0x00000001
-</span></code></pre></div><p>在使用 gdb 来查看 <code>eface</code> 数据结构的过程中，我们会发现比较特别的一点：<code>eface.data</code> 和 <code>i</code> 的地址不同。一般情况下，将一个数据赋值给 interface 时，程序会为数据生成一份副本，并将副本的地址赋给 <code>data</code> 。</p><div class=highlight><pre class=chroma><code class=language-fallback data-lang=fallback>// src/cmd/compile/internal/gc/subr.go
+// gdb info
+// (gdb) i locals
+// i = 1
+// eface = {
+//   _type = 0x55ec0 &lt;type.*+36000&gt;,
+//   data = 0xc420045f18
+// }
+// (gdb) x/x eface.data
+// 0xc420045f18:   0x00000001
+// (gdb) x/x &amp;i
+// 0xc420045f10:   0x00000001
+</code></pre><p>在使用 gdb 来查看 <code>eface</code> 数据结构的过程中，我们会发现比较特别的一点：<code>eface.data</code> 和 <code>i</code> 的地址不同。一般情况下，将一个数据赋值给 interface 时，程序会为数据生成一份副本，并将副本的地址赋给 <code>data</code> 。</p>
+<pre><code>// src/cmd/compile/internal/gc/subr.go
 // Can this type be stored directly in an interface word?
 // Yes, if the representation is a single pointer.
 func isdirectiface(t *Type) bool {
@@ -67,7 +136,14 @@ func isdirectiface(t *Type) bool {
 
     return false
 }
-</code></pre></div><p>当一个数据的类型符合 <code>isdirectiface</code> 的判定时，那么程序不会生成副本，而是直接将实际地址赋给 <code>data</code> 。由于这部分内存分配优化和 <strong>reflect</strong> 实现有关，在此就不做展开描述了。</p><blockquote><p>reflect 要想在运行时解析数据的方法和属性，它就需要知道数据以及类型元数据。而 empty interface 正好能满足这一需求，这也正是 reflect 的核心方法 <code>ValueOf</code> 和 <code>TypeOf</code> 的形参是 empty interface 的原因。</p></blockquote><p>在 Duck Typing 的使用上，empty interface 使用频率比较高的场景是 Type Switch, Type Assertion，接下来会介绍这些使用场景。</p><h4 id=22-non-empty-interface>2.2 non-empty interface<a hidden class=anchor aria-hidden=true href=#22-non-empty-interface>#</a></h4><p>相对于 empty interface 而言，有方法签名的 interface 的数据结构要复杂一些。</p><div class=highlight><pre class=chroma><code class=language-fallback data-lang=fallback>// src/runtime/runtime2.go
+</code></pre><p>当一个数据的类型符合 <code>isdirectiface</code> 的判定时，那么程序不会生成副本，而是直接将实际地址赋给 <code>data</code> 。由于这部分内存分配优化和 <strong>reflect</strong> 实现有关，在此就不做展开描述了。</p>
+<blockquote>
+<p>reflect 要想在运行时解析数据的方法和属性，它就需要知道数据以及类型元数据。而 empty interface 正好能满足这一需求，这也正是 reflect 的核心方法 <code>ValueOf</code> 和 <code>TypeOf</code> 的形参是 empty interface 的原因。</p>
+</blockquote>
+<p>在 Duck Typing 的使用上，empty interface 使用频率比较高的场景是 Type Switch, Type Assertion，接下来会介绍这些使用场景。</p>
+<h4 id="22-non-empty-interface">2.2 non-empty interface</h4>
+<p>相对于 empty interface 而言，有方法签名的 interface 的数据结构要复杂一些。</p>
+<pre><code>// src/runtime/runtime2.go
 type iface struct {
     tab  *itab
     data unsafe.Pointer
@@ -81,42 +157,58 @@ type itab struct {
     unused int32
     fun    [1]uintptr // variable sized
 }
-</code></pre></div><p><code>iface</code> 包含两个字段 <code>tab</code> 和 <code>data</code>。和 empty interface 一样，<code>data</code> 表示具体实现的数据。<code>tab</code> 不再是简单的 <code>_type</code>，不仅维护了（<code>interfacetype</code>，<code>_type</code>）匹配的信息，还维护了具体方法实现的列表入口 <code>fun</code>。</p><blockquote><p>其中 <code>interfacetype</code> 是相应 interface 类型的元数据。
-而 <code>fun</code> 字段是一个变长数组的 header ，它代表着具体方法数组的头指针，程序通过<code>fun</code>去定位具体某一方法实现。</p></blockquote><p>来看看下面这一段程序。</p><div class=highlight><pre class=chroma><code class=language-go data-lang=go><span class=kn>package</span> <span class=nx>main</span>
+</code></pre><p><code>iface</code> 包含两个字段 <code>tab</code> 和 <code>data</code>。和 empty interface 一样，<code>data</code> 表示具体实现的数据。<code>tab</code> 不再是简单的 <code>_type</code>，不仅维护了（<code>interfacetype</code>，<code>_type</code>）匹配的信息，还维护了具体方法实现的列表入口 <code>fun</code>。</p>
+<blockquote>
+<p>其中 <code>interfacetype</code> 是相应 interface 类型的元数据。
+而 <code>fun</code> 字段是一个变长数组的 header ，它代表着具体方法数组的头指针，程序通过<code>fun</code>去定位具体某一方法实现。</p>
+</blockquote>
+<p>来看看下面这一段程序。</p>
+<pre><code>package main
 
-<span class=kd>type</span> <span class=nx>Ducker</span> <span class=kd>interface</span> <span class=p>{</span>
-        <span class=nf>Quack</span><span class=p>()</span>
-        <span class=nf>Feathers</span><span class=p>()</span>
-<span class=p>}</span>
+type Ducker interface {
+        Quack()
+        Feathers()
+}
 
-<span class=kd>type</span> <span class=nx>Duck</span> <span class=kd>struct</span><span class=p>{</span> <span class=nx>x</span> <span class=kt>int</span> <span class=p>}</span>
+type Duck struct{ x int }
 
-<span class=kd>func</span> <span class=p>(</span><span class=nx>_</span> <span class=nx>Duck</span><span class=p>)</span> <span class=nf>Quack</span><span class=p>()</span> <span class=p>{</span> <span class=nb>println</span><span class=p>(</span><span class=s>&#34;Quaaaaaack!&#34;</span><span class=p>)</span> <span class=p>}</span>
+func (_ Duck) Quack() { println(&quot;Quaaaaaack!&quot;) }
 
-<span class=kd>func</span> <span class=p>(</span><span class=nx>_</span> <span class=nx>Duck</span><span class=p>)</span> <span class=nf>Feathers</span><span class=p>()</span> <span class=p>{</span> <span class=nb>println</span><span class=p>(</span><span class=s>&#34;The duck has white and gray feathers.&#34;</span><span class=p>)</span> <span class=p>}</span>
+func (_ Duck) Feathers() { println(&quot;The duck has white and gray feathers.&quot;) }
 
-<span class=kd>func</span> <span class=nf>inTheForest</span><span class=p>(</span><span class=nx>d</span> <span class=nx>Ducker</span><span class=p>)</span> <span class=p>{</span>
-        <span class=nx>d</span><span class=p>.</span><span class=nf>Quack</span><span class=p>()</span>
-        <span class=nx>d</span><span class=p>.</span><span class=nf>Feathers</span><span class=p>()</span>
-<span class=p>}</span>
+func inTheForest(d Ducker) {
+        d.Quack()
+        d.Feathers()
+}
 
-<span class=kd>func</span> <span class=nf>main</span><span class=p>()</span> <span class=p>{</span>
-        <span class=nf>inTheForest</span><span class=p>(</span><span class=nx>Duck</span><span class=p>{</span><span class=nx>x</span><span class=p>:</span> <span class=mi>1</span><span class=p>})</span>
-<span class=p>}</span>
+func main() {
+        inTheForest(Duck{x: 1})
+}
 
-<span class=c1>// gdb info at func inTheForest
-</span><span class=c1></span><span class=p>(</span><span class=nx>gdb</span><span class=p>)</span> <span class=nx>p</span> <span class=nx>d</span>
-<span class=err>$</span><span class=mi>2</span> <span class=p>=</span> <span class=p>{</span>
-  <span class=nx>tab</span> <span class=p>=</span> <span class=mh>0x97100</span> <span class=p>&lt;</span><span class=nx>Duck</span><span class=p>,</span><span class=nx>main</span><span class=p>.</span><span class=nx>Ducker</span><span class=p>&gt;,</span>
-  <span class=nx>data</span> <span class=p>=</span> <span class=mh>0xc42000a118</span>
-<span class=p>}</span>
-<span class=p>(</span><span class=nx>gdb</span><span class=p>)</span> <span class=nx>x</span><span class=o>/</span><span class=mi>2</span><span class=nx>xg</span> <span class=nx>d</span><span class=p>.</span><span class=nx>tab</span><span class=p>.</span><span class=nx>fun</span>
-<span class=mh>0x97120</span> <span class=p>&lt;</span><span class=k>go</span><span class=p>.</span><span class=nx>itab</span><span class=p>.</span><span class=nx>main</span><span class=p>.</span><span class=nx>Duck</span><span class=p>,</span><span class=nx>main</span><span class=p>.</span><span class=nx>Ducker</span><span class=o>+</span><span class=mi>32</span><span class=p>&gt;:</span>     <span class=mh>0x00000000000022f0</span>      <span class=mh>0x0000000000002230</span>
-<span class=p>(</span><span class=nx>gdb</span><span class=p>)</span> <span class=nx>i</span> <span class=nx>symbol</span> <span class=mh>0x00000000000022f0</span>
-<span class=nx>main</span><span class=p>.(</span><span class=o>*</span><span class=nx>Duck</span><span class=p>).</span><span class=nx>Feathers</span> <span class=nx>in</span> <span class=nx>section</span> <span class=p>.</span><span class=nf>text</span>
-<span class=p>(</span><span class=nx>gdb</span><span class=p>)</span> <span class=nx>i</span> <span class=nx>symbol</span> <span class=mh>0x0000000000002230</span>
-<span class=nx>main</span><span class=p>.(</span><span class=o>*</span><span class=nx>Duck</span><span class=p>).</span><span class=nx>Quack</span> <span class=nx>in</span> <span class=nx>section</span> <span class=p>.</span><span class=nx>text</span>
-</code></pre></div><p>在 <code>inTheForest</code> 函数里，<code>d.tab.fun</code> 数组包含了 <code>Duck</code> 的 <code>Quack</code> 以及 <code>Feathers</code> 的方法地址，因此在 <code>d.Quack()</code> 和 <code>d.Feathers()</code> 分别使用了 <code>Duck</code> 的 <code>Quack</code> 和 <code>Feathers</code> 方法的具体实现。假如这个时候，传入的不是 <code>Duck</code> ，而是其他实现了 <code>Ducker</code> 的数据类型，那么 <code>d.tab.fun</code> 将会包含相应类型的具体方法实现。</p><blockquote><p>d.tab.fun 不会包含 interface 定义以外的方法地址。</p></blockquote><p>不难发现，<code>itab.fun</code> 包含了具体方法的实现，程序在运行时通过 <code>itab.fun</code> 来决议具体方法的调用，这也是实现 Duck Typing 的核心逻辑。那么问题来了，<code>itab</code> 是什么时候生成的？</p><h3 id=3-itab>3. itab<a hidden class=anchor aria-hidden=true href=#3-itab>#</a></h3><p>当数据类型 <code>Duck</code> 实现了 <code>Ducker</code> 中的所有方法时，编译器才会生成 <code>itab</code>，并将 <code>Duck</code> 对 <code>Ducker</code> 的具体实现绑定到 <code>itab.fun</code> 上，否则编译不通过。<code>itab.fun</code> 很像 C++ 中的虚函数表。而 Go 没有继承关系，一个 interface 就可能会对应 N 种可能的具体实现，这种 M:N 的情况太多，没有必要去为所有可能的结果生成 <code>itab</code>。因此，编译器只会生成部分 <code>itab</code>，剩下的将会在运行时生成。</p><blockquote><p>C++ 通过继承关系，在编译期间就生成类的虚函数表。在运行状态下，通过指针来查看虚函数表来定位具体方法实现。</p></blockquote><p>当一个数据类型实现 interface 中所声明的所有方法签名，那么 <code>iface</code> 就可以携带该数据类型对 interface 的具体实现，否则将会 panic 。这部分判定需要 <code>_type</code> 和 <code>interfacetype</code> 元数据，而这部分数据在编译器已经为运行时准备好了，那么判定和生成 <code>itab</code> 就只要照搬编译器里那一套逻辑即可。</p><div class=highlight><pre class=chroma><code class=language-fallback data-lang=fallback>// src/runtime/iface.go
+// gdb info at func inTheForest
+(gdb) p d
+$2 = {
+  tab = 0x97100 &lt;Duck,main.Ducker&gt;,
+  data = 0xc42000a118
+}
+(gdb) x/2xg d.tab.fun
+0x97120 &lt;go.itab.main.Duck,main.Ducker+32&gt;:     0x00000000000022f0      0x0000000000002230
+(gdb) i symbol 0x00000000000022f0
+main.(*Duck).Feathers in section .text
+(gdb) i symbol 0x0000000000002230
+main.(*Duck).Quack in section .text
+</code></pre><p>在 <code>inTheForest</code> 函数里，<code>d.tab.fun</code> 数组包含了 <code>Duck</code> 的 <code>Quack</code> 以及 <code>Feathers</code> 的方法地址，因此在 <code>d.Quack()</code> 和 <code>d.Feathers()</code> 分别使用了 <code>Duck</code> 的 <code>Quack</code> 和 <code>Feathers</code> 方法的具体实现。假如这个时候，传入的不是 <code>Duck</code> ，而是其他实现了 <code>Ducker</code> 的数据类型，那么 <code>d.tab.fun</code> 将会包含相应类型的具体方法实现。</p>
+<blockquote>
+<p>d.tab.fun 不会包含 interface 定义以外的方法地址。</p>
+</blockquote>
+<p>不难发现，<code>itab.fun</code> 包含了具体方法的实现，程序在运行时通过 <code>itab.fun</code> 来决议具体方法的调用，这也是实现 Duck Typing 的核心逻辑。那么问题来了，<code>itab</code> 是什么时候生成的？</p>
+<h3 id="3-itab">3. itab</h3>
+<p>当数据类型 <code>Duck</code> 实现了 <code>Ducker</code> 中的所有方法时，编译器才会生成 <code>itab</code>，并将 <code>Duck</code> 对 <code>Ducker</code> 的具体实现绑定到 <code>itab.fun</code> 上，否则编译不通过。<code>itab.fun</code> 很像 C++ 中的虚函数表。而 Go 没有继承关系，一个 interface 就可能会对应 N 种可能的具体实现，这种 M:N 的情况太多，没有必要去为所有可能的结果生成 <code>itab</code>。因此，编译器只会生成部分 <code>itab</code>，剩下的将会在运行时生成。</p>
+<blockquote>
+<p>C++ 通过继承关系，在编译期间就生成类的虚函数表。在运行状态下，通过指针来查看虚函数表来定位具体方法实现。</p>
+</blockquote>
+<p>当一个数据类型实现 interface 中所声明的所有方法签名，那么 <code>iface</code> 就可以携带该数据类型对 interface 的具体实现，否则将会 panic 。这部分判定需要 <code>_type</code> 和 <code>interfacetype</code> 元数据，而这部分数据在编译器已经为运行时准备好了，那么判定和生成 <code>itab</code> 就只要照搬编译器里那一套逻辑即可。</p>
+<pre><code>// src/runtime/iface.go
 var (
     ifaceLock mutex // lock for accessing hash
     hash      [hashSize]*itab
@@ -135,7 +227,17 @@ type itab struct {
     unused int32
     fun    [1]uintptr // variable sized
 }
-</code></pre></div><p>为了保证运行效率，程序会在运行时会维护全局的 <code>itab</code> hash 表，<code>getitab</code> 会在全局 hash 表中查找相应的 <code>itab</code>。当 <code>getitab</code> 发现没有相应的 <code>itab</code> 时，它会调用 <code>additab</code> 来添加新的 <code>itab</code>。在插入新的 <code>itab</code> 之前，<code>additab</code> 会验证 <code>_type</code> 对应的类型是否都实现了 <code>interfacetype</code> 声明的方法集合。</p><blockquote><p>运行时通过 <code>itabhash</code> 负责生成 hash 值，并使用单链表来解决冲突问题，其中 <code>itab.link</code> 可用来实现链表。</p></blockquote><p>那么问题又来了，<code>_type</code> 有 N 个方法，<code>interfacetype</code> 有 M 个方法签名，验证匹配的最坏可能性就是需要 N * M 次遍历。除此之外，<code>additab</code> 在写之前需要加锁，这两方面都会影响性能。</p><h4 id=31-additab-的效率问题>3.1 additab 的效率问题<a hidden class=anchor aria-hidden=true href=#31-additab-的效率问题>#</a></h4><p>为了减少验证的时间，编译期间会对方法名进行排序，这样最坏的可能也就需要 N + M 次遍历即可。</p><blockquote><p>细心的朋友可能会发现，在上一个例子中 <code>d.tab.fun</code> 中的方法是按照字符串大小排序的。</p></blockquote><div class=highlight><pre class=chroma><code class=language-fallback data-lang=fallback>// src/runtime/iface.go
+</code></pre><p>为了保证运行效率，程序会在运行时会维护全局的 <code>itab</code> hash 表，<code>getitab</code> 会在全局 hash 表中查找相应的 <code>itab</code>。当 <code>getitab</code> 发现没有相应的 <code>itab</code> 时，它会调用 <code>additab</code> 来添加新的 <code>itab</code>。在插入新的 <code>itab</code> 之前，<code>additab</code> 会验证 <code>_type</code> 对应的类型是否都实现了 <code>interfacetype</code> 声明的方法集合。</p>
+<blockquote>
+<p>运行时通过 <code>itabhash</code> 负责生成 hash 值，并使用单链表来解决冲突问题，其中 <code>itab.link</code> 可用来实现链表。</p>
+</blockquote>
+<p>那么问题又来了，<code>_type</code> 有 N 个方法，<code>interfacetype</code> 有 M 个方法签名，验证匹配的最坏可能性就是需要 N * M 次遍历。除此之外，<code>additab</code> 在写之前需要加锁，这两方面都会影响性能。</p>
+<h4 id="31-additab-的效率问题">3.1 additab 的效率问题</h4>
+<p>为了减少验证的时间，编译期间会对方法名进行排序，这样最坏的可能也就需要 N + M 次遍历即可。</p>
+<blockquote>
+<p>细心的朋友可能会发现，在上一个例子中 <code>d.tab.fun</code> 中的方法是按照字符串大小排序的。</p>
+</blockquote>
+<pre><code>// src/runtime/iface.go
 func additab(m *itab, locked, canfail bool) {
     inter := m.inter
     typ := m._type
@@ -147,7 +249,9 @@ func additab(m *itab, locked, canfail bool) {
     // the loop is O(ni+nt) not O(ni*nt).
     ...
 }
-</code></pre></div><h4 id=32-锁的效率问题>3.2 锁的效率问题<a hidden class=anchor aria-hidden=true href=#32-锁的效率问题>#</a></h4><p>关于锁的问题，在实现 <code>getitab</code> 的时候，引入了两轮查询的策略。因为 <code>itab</code> 数据比较稳定，引入两轮查询可以减少锁带来的影响。</p><div class=highlight><pre class=chroma><code class=language-fallback data-lang=fallback>// src/runtime/iface.go
+</code></pre><h4 id="32-锁的效率问题">3.2 锁的效率问题</h4>
+<p>关于锁的问题，在实现 <code>getitab</code> 的时候，引入了两轮查询的策略。因为 <code>itab</code> 数据比较稳定，引入两轮查询可以减少锁带来的影响。</p>
+<pre><code>// src/runtime/iface.go
 func getitab(inter *interfacetype, typ *_type, canfail bool) *itab {
     ....
     // look twice - once without lock, once with.
@@ -162,35 +266,39 @@ func getitab(inter *interfacetype, typ *_type, canfail bool) *itab {
      }
      ...
 }
-</code></pre></div><p><code>itab</code> 的生成和查询或多或少带有运行时的开销。然而 <code>itab</code> 不仅提供了静态语言的类型检查，还提供了动态语言的灵活特性。只要不滥用 interface，<code>itab</code> 还是可以提供不错的编程体验。</p><h3 id=4-type-switch--type-assertion>4. Type Switch & Type Assertion<a hidden class=anchor aria-hidden=true href=#4-type-switch--type-assertion>#</a></h3><p>开发者会使用 interface 的 Type Switch 和 Type Assertion 来进行『类型转化』。</p><div class=highlight><pre class=chroma><code class=language-go data-lang=go><span class=kn>package</span> <span class=nx>main</span>
+</code></pre><p><code>itab</code> 的生成和查询或多或少带有运行时的开销。然而 <code>itab</code> 不仅提供了静态语言的类型检查，还提供了动态语言的灵活特性。只要不滥用 interface，<code>itab</code> 还是可以提供不错的编程体验。</p>
+<h3 id="4-type-switch--type-assertion">4. Type Switch &amp; Type Assertion</h3>
+<p>开发者会使用 interface 的 Type Switch 和 Type Assertion 来进行『类型转化』。</p>
+<pre><code>package main
 
-<span class=kd>type</span> <span class=nx>Ducker</span> <span class=kd>interface</span> <span class=p>{</span> <span class=nf>Feathers</span><span class=p>()</span> <span class=p>}</span>
+type Ducker interface { Feathers() }
 
-<span class=kd>type</span> <span class=nx>Personer</span> <span class=kd>interface</span> <span class=p>{</span> <span class=nf>Feathers</span><span class=p>()</span> <span class=p>}</span>
+type Personer interface { Feathers() }
 
-<span class=kd>type</span> <span class=nx>Duck</span> <span class=kd>struct</span><span class=p>{}</span>
+type Duck struct{}
 
-<span class=kd>func</span> <span class=p>(</span><span class=nx>_</span> <span class=nx>Duck</span><span class=p>)</span> <span class=nf>Feathers</span><span class=p>()</span> <span class=p>{</span> <span class=cm>/* do nothing */</span> <span class=p>}</span>
+func (_ Duck) Feathers() { /* do nothing */ }
 
-<span class=kd>func</span> <span class=nf>example</span><span class=p>(</span><span class=nx>e</span> <span class=kd>interface</span><span class=p>{})</span> <span class=p>{</span>
-	<span class=k>if</span> <span class=nx>_</span><span class=p>,</span> <span class=nx>ok</span> <span class=o>:=</span> <span class=nx>e</span><span class=p>.(</span><span class=nx>Personer</span><span class=p>);</span> <span class=nx>ok</span> <span class=p>{</span>
-		<span class=nb>println</span><span class=p>(</span><span class=s>&#34;I&#39;m Personer&#34;</span><span class=p>)</span>
-	<span class=p>}</span>
+func example(e interface{}) {
+	if _, ok := e.(Personer); ok {
+		println(&quot;I'm Personer&quot;)
+	}
 	
-	<span class=k>if</span> <span class=nx>_</span><span class=p>,</span> <span class=nx>ok</span> <span class=o>:=</span> <span class=nx>e</span><span class=p>.(</span><span class=nx>Ducker</span><span class=p>);</span> <span class=nx>ok</span> <span class=p>{</span>
-		<span class=nb>println</span><span class=p>(</span><span class=s>&#34;I&#39;m Ducker&#34;</span><span class=p>)</span>
-	<span class=p>}</span>
-<span class=p>}</span>
+	if _, ok := e.(Ducker); ok {
+		println(&quot;I'm Ducker&quot;)
+	}
+}
 
-<span class=kd>func</span> <span class=nf>main</span><span class=p>()</span> <span class=p>{</span>
-     <span class=kd>var</span> <span class=nx>d</span> <span class=nx>Ducker</span> <span class=p>=</span> <span class=nx>Duck</span><span class=p>{}</span>
-     <span class=nf>example</span><span class=p>(</span><span class=nx>d</span><span class=p>)</span>
-<span class=p>}</span>
+func main() {
+     var d Ducker = Duck{}
+     example(d)
+}
 
-<span class=c1>// result:
-</span><span class=c1>// I&#39;m Personer
-</span><span class=c1>// I&#39;m Ducker
-</span></code></pre></div><p>根据之前对 <code>itab</code> 的分析，其实 <code>e.(Personer)</code> 和 <code>e.(Ducker)</code> 这两个断言做的就是切换 <code>itab.inter</code> 和 <code>itab.fun</code> ，并不是动态语言里的『类型转化』。那么断言的函数入口在哪？</p><div class=highlight><pre class=chroma><code class=language-fallback data-lang=fallback>// go tool objdump -s &#39;main.example&#39; ./main
+// result:
+// I'm Personer
+// I'm Ducker
+</code></pre><p>根据之前对 <code>itab</code> 的分析，其实 <code>e.(Personer)</code> 和 <code>e.(Ducker)</code> 这两个断言做的就是切换 <code>itab.inter</code> 和 <code>itab.fun</code> ，并不是动态语言里的『类型转化』。那么断言的函数入口在哪？</p>
+<pre><code>// go tool objdump -s 'main.example' ./main
         main.go:15      0x2050  65488b0c25a0080000      GS MOVQ GS:0x8a0, CX
         main.go:15      0x2059  483b6110                CMPQ 0x10(CX), SP
         main.go:15      0x205d  0f86eb000000            JBE 0x214e
@@ -207,7 +315,13 @@ func getitab(inter *interfacetype, typ *_type, canfail bool) *itab {
      =&gt; main.go:16      0x2099  e892840000              CALL runtime.assertE2I2(SB)
         main.go:16      0x209e  0fb6442420              MOVZX 0x20(SP), AX
         main.go:16      0x20a3  8844242f                MOVB AL, 0x2f(SP)
-</code></pre></div><p>通过 <code>objdump</code> 发现一个很特别的方法：<code>runtime.assertE2I2</code>。<code>assertE2I2</code> 是一个断言函数，它负责判断一个 empty interface 里的数据能否转化成一个 non-empty interface，名字最后那个 <code>2</code> 代表着有两个返回值：</p><ul><li>第一参数是转化后的结果</li><li>第二参数是断言结果</li></ul><p>接下来看看 <code>assertE2I2</code> 的源码。</p><div class=highlight><pre class=chroma><code class=language-fallback data-lang=fallback>// src/runtime/iface.go
+</code></pre><p>通过 <code>objdump</code> 发现一个很特别的方法：<code>runtime.assertE2I2</code>。<code>assertE2I2</code> 是一个断言函数，它负责判断一个 empty interface 里的数据能否转化成一个 non-empty interface，名字最后那个 <code>2</code> 代表着有两个返回值：</p>
+<ul>
+<li>第一参数是转化后的结果</li>
+<li>第二参数是断言结果</li>
+</ul>
+<p>接下来看看 <code>assertE2I2</code> 的源码。</p>
+<pre><code>// src/runtime/iface.go
 func assertE2I2(inter *interfacetype, e eface, r *iface) bool {
     if testingAssertE2I2GC {
         GC()
@@ -232,7 +346,9 @@ func assertE2I2(inter *interfacetype, e eface, r *iface) bool {
     }
     return true
 }
-</code></pre></div><p>该函数会拿出 empty interface 中的 <code>_type</code> 和 <code>interfacetype</code> 在 <code>getitab</code> 中做查询和匹配验证。如果验证通过，<code>r</code> 会携带转化后的结果，并返回 <code>true</code>。否则返回 <code>false</code>。</p><p><code>src/runtime/iface.go</code> 中还有很多类似 <code>assertE2I2</code> 的函数，在这里就不一一阐述了。</p><div class=highlight><pre class=chroma><code class=language-fallback data-lang=fallback>// T: 具体的数据类型_type
+</code></pre><p>该函数会拿出 empty interface 中的 <code>_type</code> 和 <code>interfacetype</code> 在 <code>getitab</code> 中做查询和匹配验证。如果验证通过，<code>r</code> 会携带转化后的结果，并返回 <code>true</code>。否则返回 <code>false</code>。</p>
+<p><code>src/runtime/iface.go</code> 中还有很多类似 <code>assertE2I2</code> 的函数，在这里就不一一阐述了。</p>
+<pre><code>// T: 具体的数据类型_type
 // E: empty interface
 // I:  non-empty interface
 
@@ -248,13 +364,41 @@ func assertI2T(t *_type, i iface, r unsafe.Pointer) {...}
 
 func convI2I(inter *interfacetype, i iface) (r iface) {...}
 func convI2E(i iface) (r eface) {...}
-</code></pre></div><h3 id=5-最后>5. 最后<a hidden class=anchor aria-hidden=true href=#5-最后>#</a></h3><p>interface 的 Duck Typing 可以用来实现『多态』、代码的模块化。但是这毕竟有运行时的开销，interface 的滥用和声明大量的方法签名还是会影响到性能。</p><h3 id=6-reference>6. Reference<a hidden class=anchor aria-hidden=true href=#6-reference>#</a></h3><ul><li><a href=https://en.wikipedia.org/wiki/Duck_typing>Duke Typing</a></li><li><a href=http://coolshell.cn/articles/12165.html>C++ 虚函数表解析</a></li><li><a href=https://research.swtch.com/interfaces>Go Data Structures: Interfaces</a></li></ul></div><footer class=post-footer><ul class=post-tags></ul><nav class=paginav><a class=prev href=https://fuweid.com/post/2017-protobuf-3-encoding/><span class=title>« Prev</span><br><span>Protobuf 3.0 编码</span></a>
-<a class=next href=https://fuweid.com/post/2017-control-your-shell-script/><span class=title>Next »</span><br><span>让你的 shell 脚本变得可控</span></a></nav></footer></article></main><footer class=footer><span>&copy; 2024 <a href=https://fuweid.com/>fuweid</a></span>
-<span>Powered by
-<a href=https://gohugo.io/ rel="noopener noreferrer" target=_blank>Hugo</a> &
-        <a href=https://github.com/adityatelange/hugo-PaperMod/ rel=noopener target=_blank>PaperMod</a></span></footer><a href=#top aria-label="go to top" title="Go to Top (Alt + G)" class=top-link id=top-link accesskey=g><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 12 6" fill="currentcolor"><path d="M12 6H0l6-6z"/></svg></a><script>let menu=document.getElementById('menu')
-if(menu){menu.scrollLeft=localStorage.getItem("menu-scroll-position");menu.onscroll=function(){localStorage.setItem("menu-scroll-position",menu.scrollLeft);}}
-document.querySelectorAll('a[href^="#"]').forEach(anchor=>{anchor.addEventListener("click",function(e){e.preventDefault();var id=this.getAttribute("href").substr(1);if(!window.matchMedia('(prefers-reduced-motion: reduce)').matches){document.querySelector(`[id='${decodeURIComponent(id)}']`).scrollIntoView({behavior:"smooth"});}else{document.querySelector(`[id='${decodeURIComponent(id)}']`).scrollIntoView();}
-if(id==="top"){history.replaceState(null,null," ");}else{history.pushState(null,null,`#${id}`);}});});</script><script>var mybutton=document.getElementById("top-link");window.onscroll=function(){if(document.body.scrollTop>800||document.documentElement.scrollTop>800){mybutton.style.visibility="visible";mybutton.style.opacity="1";}else{mybutton.style.visibility="hidden";mybutton.style.opacity="0";}};</script><script>document.getElementById("theme-toggle").addEventListener("click",()=>{if(document.body.className.includes("dark")){document.body.classList.remove('dark');localStorage.setItem("pref-theme",'light');}else{document.body.classList.add('dark');localStorage.setItem("pref-theme",'dark');}})</script><script>document.querySelectorAll('pre > code').forEach((codeblock)=>{const container=codeblock.parentNode.parentNode;const copybutton=document.createElement('button');copybutton.classList.add('copy-code');copybutton.innerHTML='copy';function copyingDone(){copybutton.innerHTML='copied!';setTimeout(()=>{copybutton.innerHTML='copy';},2000);}
-copybutton.addEventListener('click',(cb)=>{if('clipboard'in navigator){navigator.clipboard.writeText(codeblock.textContent);copyingDone();return;}
-const range=document.createRange();range.selectNodeContents(codeblock);const selection=window.getSelection();selection.removeAllRanges();selection.addRange(range);try{document.execCommand('copy');copyingDone();}catch(e){};selection.removeRange(range);});if(container.classList.contains("highlight")){container.appendChild(copybutton);}else if(container.parentNode.firstChild==container){}else if(codeblock.parentNode.parentNode.parentNode.parentNode.parentNode.nodeName=="TABLE"){codeblock.parentNode.parentNode.parentNode.parentNode.parentNode.appendChild(copybutton);}else{codeblock.parentNode.appendChild(copybutton);}});</script></body></html>
+</code></pre><h3 id="5-最后">5. 最后</h3>
+<p>interface 的 Duck Typing 可以用来实现『多态』、代码的模块化。但是这毕竟有运行时的开销，interface 的滥用和声明大量的方法签名还是会影响到性能。</p>
+<h3 id="6-reference">6. Reference</h3>
+<ul>
+<li><a href="https://en.wikipedia.org/wiki/Duck_typing">Duke Typing</a></li>
+<li><a href="http://coolshell.cn/articles/12165.html">C++ 虚函数表解析</a></li>
+<li><a href="https://research.swtch.com/interfaces">Go Data Structures: Interfaces</a></li>
+</ul>
+
+            </article>
+        </div>
+
+        <footer>
+    &copy; 2024 Fu Wei
+</footer>
+
+<script>
+    function doPrettify(){
+        pres=document.getElementsByTagName('pre');
+        for (i=0; i < pres.length; i++) {
+            pres[i].className+=" prettyprint";
+        }
+        prettyPrint();
+    }
+</script>
+
+
+<script async src="https://www.googletagmanager.com/gtag/js?id=G-1C7VLVHN52"></script>
+<script>
+  window.dataLayer = window.dataLayer || [];
+  function gtag(){dataLayer.push(arguments);}
+  gtag('js', new Date());
+
+  gtag('config', 'G-1C7VLVHN52');
+</script>
+
+    </body>
+</html>

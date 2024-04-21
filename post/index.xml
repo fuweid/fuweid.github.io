@@ -1,9 +1,9 @@
 <?xml version="1.0" encoding="utf-8" standalone="yes"?>
-<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:content="http://purl.org/rss/1.0/modules/content/">
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom">
   <channel>
-    <title>Posts on fuweid</title>
+    <title>Posts on Fu, Wei</title>
     <link>https://fuweid.com/post/</link>
-    <description>Recent content in Posts on fuweid</description>
+    <description>Recent content in Posts on Fu, Wei</description>
     <generator>Hugo -- gohugo.io</generator>
     <lastBuildDate>Thu, 11 Apr 2024 20:48:45 +0800</lastBuildDate><atom:link href="https://fuweid.com/post/index.xml" rel="self" type="application/rss+xml" />
     <item>
@@ -12,7 +12,11 @@
       <pubDate>Thu, 11 Apr 2024 20:48:45 +0800</pubDate>
       
       <guid>https://fuweid.com/post/2024-dirtypage-2/</guid>
-      <description>etcd-io/etcd#17615</description>
+      <description>分享一个 etcd-io/etcd@17615 问题：用户发现 etcd 进程写入 WAL 日志有抖动，但是磁盘压力并不大，而且 fsync 系统调用都很正常； 后来通过 Tracing 工具定位到了内核 memory-cgroup 脏页数据统计有问题，不过该问题仅会出现在 v5.15.0-63 小版本。 17615 问题单里有详尽的定位过程，推荐看看。 因为这个问题，我翻阅了相关的内核 PATCH 邮件，做了以下的脏页分配限流 (简单) 总结。
+脏页分配限流 - balance_dirty_pages 回写 (Writeback) 是指内核负责将脏页 (DirtyPage) 刷入存储设备上，它涉及到脏页分配控制。
+在 v4.2 版本之前，脏页分配更多是由 memory-cgroup 来控制；而脏页流控核心 - balance_dirty_pages - 根据全局的脏页水位情况来决定是否需要控速。 在 LinuxCon Japan 2015 会议上，内核开发者 Tejun Heo 认为，在没有感知到全局脏页水位的情况，memory-cgroup 无法对脏页进行有效的控制。 核心 balance_dirty_pages 函数通过 vm.dirty[_background]_{ratio, bytes} 参数来计算全局脏页的水位上限。 Tejun Heo 认为普通的 memory-cgroup 也应采用同样的方式来计算组内的脏页水位上限，而根组 memory-cgroup 只不过是退化到全局模式，当然全局脏页的水位优先级更高。
+ NOTE: balance_dirty_pages_ratelimited 会调用 balance_dirty_pages。
+ 在 writeback: cgroup writeback support PATCH 合并到 v4.</description>
     </item>
     
     <item>
@@ -21,7 +25,10 @@
       <pubDate>Sun, 13 Aug 2023 23:48:45 +0800</pubDate>
       
       <guid>https://fuweid.com/post/2023-08-sync-containerd-issue/</guid>
-      <description>近期的高频问题都跟 IO 压力有关</description>
+      <description>最近 Issue 8698 有用户说容器启动和清理都偏慢，尤其多个 Pod 同时启动时现象特别明显。之前有过类似的问题: containerd 启动容器前，它需要临时挂载 rootfs 来读取 uid/gid 信息。因为挂载的是可写属性的 overlayfs，卸载时内核会强制刷盘。当系统大量的脏页数据需要回写时，这个刷盘动作容易造成系统卡顿。 oci: use readonly mount to read user/group info 已经解决读取 uid/gid 的性能问题了，但这一次是 Pod Init-container 带来的 。
+Init-container rootfs 大部分都是可写模式的 overlayfs，如果 Init-container 是做数据预下载的话，那么 containerd 在删除 Init-container 时，内核一定会刷盘。在大部分场景下，同一个节点上的 Pod 共享同一块数据盘，这种不预期的刷盘很容易把系统打崩。还有 Issue 8647 用户说，他的系统一开始还好好的，跑几天就不稳定了。后来查看他提供的日志，发现有几个 Pod 一直启动失败，相当于每隔几秒都要去刷盘，导致整个系统不稳定。
+这个问题的最佳解决方案应该是做好 Pod 的存储隔离，但显然这成本确要高不少。然而 Kubernetes 场景下的容器并不会重启，即使在「失败后无限重启」的策略下，kubelet 依然是删除重建，这也意味着容器 rootfs 并不需要持久化。个人觉得，成本最低的解决方案应该是使用 overlayfs-volatile-mount，它需要 Linux Kernel ≥ 5.10。以下是个人目前了解到的情况，大部分云厂家都支持了 overlayfs-volatile。
+ Azure Ubuntu 22.04 LTS - Kernel 5.15 (GA) AWS Kubernetes ≥ 1.</description>
     </item>
     
     <item>
@@ -30,7 +37,10 @@
       <pubDate>Sun, 19 Mar 2023 19:48:45 +0800</pubDate>
       
       <guid>https://fuweid.com/post/2023-containerd-17-gc/</guid>
-      <description>主要介绍下 containerd 垃圾回收机制</description>
+      <description>之前和苦总/Ace 维护 pouch-container/containerd 的时候，我们遇到比较多的问题是资源泄漏，比如节点负载太高以至于无法 umount 容器根目录(容器 bundle 目录残留），内核 pidns 死锁问题导致容器进程僵尸态( cgroup 残留)，还有进程重启导致 CNI 网络资源泄漏等等。对于内核死锁等问题，重启可能是唯一的解决方案；而那些因为短期高负载或者进程重启导致的资源泄漏，它们需要从系统层面解决，至少应该让资源的创建者有机会去清理。
+containerd 它本身就具备垃圾回收能力，但它只关注内部资源的清理，比如镜像数据以及容器可写层。而 CNI 网络资源以及 containerd-shim 等外部资源并不在垃圾回收的管理范围内，这部分资源容易出现泄漏的情况，比如 GKE 平台的用户就多次遇到了 Containerd IP leakage : 直到 pause 容器创建之前，containerd 仅在内存里保持对网络资源的引用；在将网络资源绑定给 pod 以前，containerd 一旦被强制重启就会发生泄漏。当时 containerd 社区的处理方式是提前创建 pod 记录，以此来提前关联网络资源，并利用 kubelet 的垃圾回收机制来触发资源清理。问题倒是解决了，但该方案仅适用于 kubernetes 场景，最合理的方案应该是创建者应具备周期性的清理流程。
+考虑我们还有 shim 资源泄漏的问题，containerd 社区提了 Add collectible resources to metadata gc 方案来管理外部资源清理。在介绍这个方案之前，我想先介绍下 containerd 的垃圾清理机制。
+基于标签系统和 lease 构建的垃圾回收 containerd 核心插件 metadata 管理着容器和镜像数据，如下图所示，其中虚线方块代表着子模块，比如 Images 代表着 image service，它仅用来管理镜像名字和镜像 manifest 的映射关系，而镜像的 blob 数据和解压后的文件内容分别由 content service 和 snapshot service 管理；需要说明的是，container service 仅用来保存用于启动容器的配置信息，它并不负责管理容器进程的生命周期。</description>
     </item>
     
     <item>
@@ -39,7 +49,10 @@
       <pubDate>Mon, 13 Mar 2023 01:20:45 +0800</pubDate>
       
       <guid>https://fuweid.com/post/2023-containerd-17-transfer-service/</guid>
-      <description>镜像下载流程调整</description>
+      <description>从 HELM Chart 成功对接容器镜像仓库开始，到近两年 OCI 社区 artifacts 标准化的落地推广，现在 OCI Registry as Storage 已经是事实标准，不同业务场景的数据存储都可以对接 OCI registry 的分发协议。同时，这几年容器镜像的安全供应链需求徒增，以及各大云厂商对容器镜像 lazy-loading 探索力度在加大，OCI 社区在 artifacts 标准的基础上为容器镜像引入 referrers 定义：在保证前后兼容的情况下，每一个容器镜像都可以通过关联的 artifacts 来拓展自身的属性，如下图所示，用户可以通过 referrers 关联特性为 net-monitor:v1 镜像提供了镜像签名和 SBOM 信息。当然，容器镜像 lazy-loading 属性也可以与之相关联，比如阿里云的 overlaybd，蚂蚁金服的 nydus 以及亚马逊的 soci。
+ NOTE: 图片取自 Feynman Zhou 发表的 Azure Container Registry: the first cloud registry to support the OCI Specifications 1.1 文章。
+ 可预见的是，各大云厂商的镜像仓库都会跟进这一标准，安全供应链以及容器镜像加速的增值服务也会因此得到大面积推广。而作为容器镜像的消费端，为了支持这一特性，containerd 社区的想法是引入组合型插件 Image Transfer Service，将镜像分发和打包处理都抽象成数据流的转发，并统一收编在服务端处理。
+Pull 需要新的抽象 在 containerd 1.7 版本之前，镜像数据处理的绝大部分操作都集中在客户端。containerd 设计偏向于把服务端做薄，服务端仅做底层资源的 CRUD；而客户端则采用类似 Backends For Frontend 理念来为复杂流程封装接口，如下图所示 Pull 镜像的函数接口。下载镜像涉及到镜像地址解析、密钥管理、并发下载以及解压处理，但该流程仅适用于下载标准格式的镜像，任何调整都容易产生不适。</description>
     </item>
     
     <item>
@@ -48,7 +61,10 @@
       <pubDate>Sat, 04 Mar 2023 15:20:45 +0800</pubDate>
       
       <guid>https://fuweid.com/post/2023-containerd-17-userns/</guid>
-      <description>Usernamespace 实验特性介绍</description>
+      <description>containerd 1.7 版本有比较多的实验特性。在这里，我会介绍 containerd 对 UserNamespace Stateless Pod 支持的情况，算是个人对 containerd 1.7 版本特性介绍系列的开篇。
+1. UserNamespace 安全特性 Linux 内核是基于进程的 credentials(7) 凭证来做访问控制，比如进程的拥有者标识 UID/GID 和用于系统资源访问控制判定的 Effective UID/GID 等凭证。而 user_namespace(7) 提供了安全隔离特性。在不同的 user namespace(userns) 下，同一个进程不仅有不同的 UID/GID，同时还具备了不同的 capabilities(7) 权限。比如 u1001 用户进程 bash 通过 unshare -r bash 进入到了新的 userns，并将自己映射成了 root 用户，还具备了所有的 capabilities。但这个进程真的就变成了特权进程？这取决于该用户在系统资源所属的 userns 里是否拥有访问权限。
+在介绍具体的判定规则前，先花点时间了解下内核是如何管理 UID/GID 的映射关系。
+每个进程都必须归属于某一个 userns。在初始状态下，进程都属于 initial userns。Initial userns 比较特殊，它没有任何映射关系；Linux 支持嵌套的 userns，所有正在使用的 userns 组成的关系图将会是以 initial userns 为根的树状图。在 parent userns 里的进程，只要具备 CAP_SET{UID,GID} 能力，这些进程就可以通过 /proc/[pid]/{uid,gid}_map 文件接口，以 ID-inside-ns ID-outside-ns Range-length 的格式，给刚进入 child userns 的进程设置 UID/GID 映射关系，而创建该 userns 进程的 Effective UID(EUID) 将成为 userns 的所有者，如下图所示。</description>
     </item>
     
     <item>
@@ -57,7 +73,11 @@
       <pubDate>Sat, 15 Oct 2022 18:20:45 +0800</pubDate>
       
       <guid>https://fuweid.com/post/2022-go-unshare-clonefs/</guid>
-      <description>一次不错的尝试</description>
+      <description>背景 在 Linux 平台上，大部分情况下会使用 OverlayFS 文件系统来管理容器镜像存储，而 OverlayFS 文件的特点也比较符合容器场景使用：它不仅可以将多个目录合并成统一的访问视图，还能做到读写分离。
+mount -t overlay overlay \  -olowerdir=/lower1:/lower2:/lower3,upperdir=/upper,workdir=/work \  /merged 如上面的挂载命令所示， lowerdir 代表着容器镜像层解压后的目录。从 OCI Image 标准 定义来看，容器镜像的层数并没有限制。但 mount(2) 系统调用的参数被严格限制在 4KiB，所以实际使用的容器镜像层级有限制的。
+为了解决这个层级的问题，Docker 采用压缩 lowerdir 参数来尽可能地支持更多层级的容器镜像。Docker 存储插件使用 l/${random-id(len=26)} 软链接指向实际的存储目录，然后跳到 /var/lib/docker/overlay2 目录下进行挂载，这样就不需要在 lowerdir 参数里重复填写 /var/lib/docker/overlay2/ 这 25 个字符。按照 Docker 代码里的注释，Overlay 镜像存储最大可支持到 128 层。
+/var/lib/docker/overlay2/l/63WSQBTYICXV2O7SOZXAXYLAY2 -&amp;gt; ../f98d68377b05c44bacc062397f7ebaaf066b070fce15fbcfe824698d15f2eaa8/diff 但在当时，Go 并没有提供太多的线程操作，所有被 Go-Runtime 管理的线程都使用了 CLONE_FS。一旦某个 Goroutine 通过 Chdir 修改了当前工作目录，这会污染到整个进程，Docker 无法基于这样的方式来并发处理 OverlayFS 挂载请求，所以在当时只能选择 Fork-Exec 子进程来处理。考虑到维护多个二进制的成本过高，Docker 采用了 Re-exec 的方式。
+不管怎么样，Fork-Exec 处理挂载成本很高，而且这样挂载逻辑没法独立成一个 Go Package，它要求使用者在 Go-Main-Init 函数里添加启动的预处理逻辑。所以在 containerd 项目里，我们采用了 Clone-Thread 的形式。</description>
     </item>
     
     <item>
@@ -66,7 +86,11 @@
       <pubDate>Sun, 12 Jun 2022 12:00:53 +0800</pubDate>
       
       <guid>https://fuweid.com/post/2022-bpf-kprobe-fentry-poke/</guid>
-      <description>基于 x86_64 CPU 架构汇编指令的跳板技术运用</description>
+      <description>在 containerd 自定义插件 embedshim 项目里，我借助了 Linux 内核里的 trace_sched_process_exit 观测能力，并利用 eBPF Map 记录和持久化容器进程退出事件。 这类观测能力依赖内核在关键代码路径上提前定义好钩子，它属于静态观测技术，任何变化都需要重新编译 Linux 内核。 如果我们想观测内核中的某一个关键函数或者某一行关键代码时，我们可以选择 kprobe 或者 ftrace 这类动态观测技术。
+kprobe - single-step Kernel Probe(kprobe) 是一个轻量级内核指令观测的技术，用户可以指定观测内核的某一个函数，甚至可以观测函数内的某一条指令，除了 kprobe 框架自身的代码以及异常处理函数外，用户几乎可以观测内核运行的每一条指令。
+当 CPU 执行到被观测指令时，也就是产生了一次 观测事件，那么 kprobe 会把当前 CPU 的寄存器信息作为输入去执行用户注册的观测程序。 然而被观测的指令由用户随机指定，考虑到性能问题，kprobe 无法在编译内核时为每一条指令预留埋点，同时我们很难在编译好的程序里动态插入指令。 基于性能和稳定性考虑，kprobe 选择了 单步调试 的通用方案。
+在介绍 kprobe 方案之前，我们先简单回顾下 gdb 调试过程。为了调试某一行代码，我们先通过 breakpoint 给该行打上断点，当程序运行到该行代码时就会停下来，等待我们的下一步交互。 这个时候我们就可以通过 p 或者 info 等命令来查看当前程序的状态，甚至我们还可以通过 单步调试 来观察程序每条指令带来的变化。 我们利用断点和单步调试产生的 停顿 来观测程序，这本质上也是一种埋点，内核也正是通过这种方式来实现 kprobe，如下图所示。
+x86_64 CPU 架构下的断点指令为 INT3，它是一个单字节指令 0xcc 。我们可以用 INT3 来替换任何指令的 opcode，被替换的指令（以及后续指令）都将被中断所短路掉，而 CPU 将进入 do_int3 [1] 中断处理逻辑。</description>
     </item>
     
     <item>
@@ -75,7 +99,12 @@
       <pubDate>Mon, 02 May 2022 18:20:45 +0800</pubDate>
       
       <guid>https://fuweid.com/post/2022-embedshim-kernel-is-my-sidecar/</guid>
-      <description>移除 runC shim 已成为可能！</description>
+      <description>在 2019 年的时候，当时所在的团队正在开始大规模使用 containerD，我们初期遇到较多 containerd-shim 的死锁等稳定性问题，我们不得不去思考去除 containerd-shim 进程的可能性。由于当时技术选型上的限制，containerd-shim 必须作为容器 subreaper 而存在。直到去年才留意到 pidfd pollable，我才发现 containerd-shim 管控面其实是可以被移除。我顺着这个思路作出了 embedshim 这个 containerD 第三方插件。在介绍这个插件之前，我们先简单回顾下 containerd-shim 的发展历程。
+1. 从 docker 的原地升级到 containerd-shim 1.1 原地升级的需求 最初 dockerd 的容器进程管理是非常简单粗暴的，它采用了 Fork-and-Wait 模式来监控容器状态，并通过无名管道接管容器的标准输入输出。如果 dockerd 进程重启，那么它将无法重新监控容器的状态变化，而这些已运行的容器都将变成 孤儿。为了防止资源残留，dockerd 重启后的第一件事就是停掉正在运行的容器。然而节点组件的重启和周期性升级都属于正常操作，dockerd 停服重启应保证正在运行的容器不受影响。
+这 docker#2658 帖子记录了当时 dockerd 原地升级的细节讨论；当然除了方案讨论外，用户对该需求落地呼声评论是更强烈些的。组件进程重启涉及到的细节比较多，但可以归类为状态恢复以及临时（残留）数据的清理，比如有讨论清理未完成的网络初始化资源，有讨论如何恢复接管容器的标准输出，还有讨论如何做镜像下载的断点续下等等。而对于本文的主题 - 如何重新接管存量容器进程的场景而言，个人认为仅需要考虑下面两个问题即可：
+ 如何保证容器退出事件不丢失？ 如何重新接管容器的标准输入输出？  首先，我们来看第一个问题。进程退出码能正确反映一个进程是以什么状态结束的，有正常退出的，有收到 SIGTERM 信号优雅停服的，还有因无法分配新的内存而被内核 SIGKILL 的。开发者和运维人员可以根据进程退出码以及关键日志信息来做 非预期退出事件 的诊断，所以对于进程管理方案而言，进程退出码必须要能被正确捕获，而当时最稳妥的方式是有一个常驻进程来做容器进程的 subreaper。
+相比于第一个问题，第二个问题处理起来要简单些。经历过早期节点运维的朋友都知道，在容器化之前呢，大部分业务进程的管理是通过 systemd-service 来实现。业务进程直接被一号进程所监管，同时它们采用了 Headless 无界面无交互的方式运行。它们的标准输出通常以 UDS 流的形式传递给 systemd-journald 服务，由 systemd-journald 来做日志持久化和轮动存储。
+容器化后的节点运维比 systemd 模式要稍微复杂些。容器化产生了根路经和资源视图隔离，容器管理面需要封装 nsenter 和 chroot/pivot 等系统调用来提供便捷的运维通道。dockerd 进程提供了 execCreate/execStart/execAttach HTTP 接口来进入到容器隔离视图，这种具有交互能力的运维通道必定会感知 dockerd 停服。但个人认为这种感知是可接受的，只要能保证容器标准输出不因 dockerd 停服而丢失即可。在标准输入输出的接管上，dockerd 并没有采用 UDS 流模式，而是采用有名管道的方式。</description>
     </item>
     
     <item>
@@ -84,7 +113,10 @@
       <pubDate>Thu, 10 Mar 2022 00:00:45 +0800</pubDate>
       
       <guid>https://fuweid.com/post/2022-ebpf-portable-with-btfhub/</guid>
-      <description>如何在低内核版本实现 eBPF CO-RE ?</description>
+      <description>在上一篇 eBPF Loader 中介绍了 eBPF 加载器的工作原理。Compile-Once Run-Everywhere (CO-RE) 是目前社区的发力方向，但它要求内核版本支持 CONFIG_DEBUG_INFO_BTF=y 特性。除了 REHL 等商业公司会回合高版本特性到当前支持的商业版本之外，大部分社区免费版本都要求 &amp;gt;= 5.5 版本的内核。为了能在当前主流的 4.14, 4.15, 4.18, 4.19 内核版本上支持 eBPF CO-RE 特性， Aqua Security 的工程师在 2021 Linux Plumbers Conference - Towards truly portable eBPF 议题上展示了它们的想法: BTF-Hub + Embedded BTF。
+1. BPF Portable 作为用户提供的程序片段，eBPF bytecode 可直接注入到 linux 内核里直接读取和操作内核运行态的内存数据，它的可观测性和对内核模块的可拓展性受到系统开发者的青睐。这是它强大的优势，但同时也是一大痛点：只有获得了目标内核版本的头文件才能保证 eBPF 程序能正确地访问内存数据。
+早期在使用 bcc 诊断工具时，我们需要 llvm/clang 做 eBPF 实时编译；如果开发 - 测试 - 线上环境没有做到版本的强一致，那么即使逃过了 BPF Verifier 的审判，程序也会因为没有正确地读取内存 (偏移地址不正确) 而出现非预期的行为。
+虽然 eBPF 程序的非预期行为不会导致内核崩溃，但研发体验和内核模块开发差别不大：eBPF 开发者还是需要针对不同的内核版本编译出不同的版本，线上内核版本越多，测试上线的成本就越高。下图为 Falco 为不同版本提供的内核模块；如果 eBPF 没有移植能力的话，它的发布模式其实和普通的内核模块差别不大。一次构建，到处运行 的能力直到 BPF Type Format (BTF) 的出现才有了质的飞跃。</description>
     </item>
     
     <item>
@@ -93,7 +125,10 @@
       <pubDate>Sun, 27 Feb 2022 23:00:53 +0800</pubDate>
       
       <guid>https://fuweid.com/post/2022-ebpf-loader/</guid>
-      <description>如何加载 eBPF 二进制</description>
+      <description>0. What is eBPF? Extended Berkeley Packet Filter (eBPF) 是由 Linux 提供的内核技术，它是以安全沙盒 (Virtual Machine) 的形式运行用户定义的 ByteCode 来观测内核运行状态以及拓展内核的能力，开发者无需定制内核模块就可以高效地完成对现有模块的拓展。eBPF 安全沙盒是嵌入到 Linux 内核运行态的关键路径上，通过事件订阅的形式来触发 eBPF 程序，其运用场景有：
+ cilium 在 L3/L4 提供高效的网络转发能力 bcc 提供常用的观测组件来定位业务遇到的性能问题 Google 内核调度拓展 ghOSt  我过去主要使用 eBPF 在观测和排查一些节点的性能问题。由于底层基础设施能力以及业务运行模型存在差异，这将导致节点组件出现不在预期内的行为，而在本地又难以复现，大大增加了沟通和排查成本。而 eBPF 可以捕捉到程序在内核里的状态，甚至是短命的程序调用 (比如容器领域的 runC 命令) 都可以捕捉, 它可以最大程度地呈现程序的运行状态来提升问题的排查效率。
+比如前段时间遇到的 containerD CRI 组件创建容器超时的问题，我通过 bcc stackcount 捕抓到 根因: umount 可写的文件系统时会调用底层文件系统的刷盘动作，它用来保证数据能及时落盘；但这同时也给磁盘带来压力，IOPS 弱的数据盘将会拖慢 umount 调用。对于一个不熟悉内核代码的开发者来说，eBPF 观测类工具暴露出的关键函数路径就和日志的错误信息一样，全局搜索相应的内核代码段，然后顺藤摸瓜，总会找到些蛛丝马迹。
+eBPF 目前发展的比较快，其中一个重要的支线是 Compile-Once Run-Everwhere (CO-RE) ，这有点像 docker 镜像分发的 Build-Once Run-Anywhere, 下面将主要围绕兼容性去介绍如何加载 eBPF 程序。</description>
     </item>
     
     <item>
@@ -102,7 +137,11 @@
       <pubDate>Sun, 21 Jun 2020 18:00:53 +0800</pubDate>
       
       <guid>https://fuweid.com/post/2020-go-sync-mutex-insight/</guid>
-      <description>基于 go1.14.4 源码分析 sync.Mutex </description>
+      <description>Linux Kernel 提供 Semaphore/Mutex 来实现线程间的同步机制，可保证在同一个时间段 只有少量的线程可以访问同一块资源（也称为进入临界区域）。 线程之间要通过竞争来获得访问权限，一旦竞争失败，线程会进入到阻塞状态； 而阻塞的线程只能等待离开临界区域被内核唤醒。
+go runtime 提供的 sync.Mutex 并不是采用内核级别的同步机制。 作为执行单元的线程一旦阻塞，意味该线程将不再受到 go runtime 控制， go runtime 需要创建新的线程来执行其他 runnable goroutine ， 线程的数目会和竞争资源的请求成正比，容易造成资源浪费。 而 go 优势是 goroutine 轻量级调度，因此 sync.Mutex 选择在用户态来实现同步机制。
+和线程阻塞类似，在无法进入临界区的情况下，goroutine 会主动释放当前的 执行单元 - 线程，进入到阻塞状态；在 sync.Mutex 持有者离开临界区之前， 阻塞状态的 goroutine 将不会出现在调度队列里。 这样被释放的线程会去执行其他 runnable goroutine，提升线程的利用率。
+sync.Mutex 结构设计分析 Mutex 也被称之为锁。
+// sync/mutex.go  // A Mutex is a mutual exclusion lock. // The zero value for a Mutex is an unlocked mutex. // // A Mutex must not be copied after first use.</description>
     </item>
     
     <item>
@@ -111,7 +150,9 @@
       <pubDate>Sat, 30 May 2020 00:00:00 +0800</pubDate>
       
       <guid>https://fuweid.com/post/2020-go-string-data-race/</guid>
-      <description>panic or not?</description>
+      <description>写过 Go 代码的同学都知道，在程序内启动多个 goroutine 处理任务是很常见的事情， 启动一个 goroutine 要比启动一个线程简单的多。当多个 goroutine 同时处理同一份数据时， 我们应该在代码中加入同步机制，保证多个 goroutine 按照一定顺序来访问数据， 不然就会出现 data race。 最常见的例子如下，同时写操作 map 数据会导致程序 panic，即使操作的是不同 key：
+// example 1  package main func main() { for { c := make(chan bool) m := make(map[string]string) go func() { m[&amp;#34;1&amp;#34;] = &amp;#34;a&amp;#34; // First conflicting access.  c &amp;lt;- true }() m[&amp;#34;2&amp;#34;] = &amp;#34;b&amp;#34; // Second conflicting access.  &amp;lt;-c } } 那么下面的代码也会 panic 吗？
+// example 2 // 1 package main 2 3 import &amp;#34;sync&amp;#34; 4 5 func main() { 6 var wg sync.</description>
     </item>
     
     <item>
@@ -120,7 +161,10 @@
       <pubDate>Sat, 21 Mar 2020 00:00:00 +0800</pubDate>
       
       <guid>https://fuweid.com/post/2020-digital-book-from-safari/</guid>
-      <description>O&amp;#39;Reilly Online Books 另外一种打开方式</description>
+      <description>想当初，为了看 Operating Systems: Three Easy Pieces 和 A Philosophy of Software Design 原版技术书，还特别麻烦了朋友从国外人肉带回来，成本极高。 但如果等国内出版社引进，就会出现时间跨度太大没法尝鲜；加上翻译水平参差不齐，等待中文版的路子基本上行不通。 为了解决这个尴尬问题，最近找到了一个比较实惠看国外原版书籍的方式：ACM Professional Membership。
+ACM Professional Membership 会员权益 有很多，其中有一项是：
+ Learning Center with resources for lifelong learning, including online courses targeted toward essential IT skills and popular certifications; online books &amp;amp; videos from Skillsoft®, online books from O&amp;rsquo;Reilly®, Morgan Kaufmann and Syngress; videos and webinars on hot topics, presented by today&amp;rsquo;s innovators
+ 会员可以享受学习平台，其中包含了 O&amp;rsquo;Reilly online books。 平时在网上买技术书籍，基本上都能看到 O&amp;rsquo;Reilly 动物封面书籍，比如 Site Reliability Engineering。 这个出版社覆盖的书籍比较多，基本上能满足我大部分阅读需求。 本着怀疑的态度看这个权益，没想到尝试之后，真香。</description>
     </item>
     
     <item>
@@ -129,7 +173,29 @@
       <pubDate>Sun, 02 Jun 2019 00:00:00 +0000</pubDate>
       
       <guid>https://fuweid.com/post/2019-hola-barcelona/</guid>
-      <description>忙里偷闲，感受下时差</description>
+      <description>前段时间因为 KubeCon 演讲去了趟西班牙-巴塞罗那，忙里偷闲，感受了下西方文化。
+不再是「白本」 5.18 号从杭州出发，途径香港转机到巴塞罗那。飞机上的娱乐设施还算丰富，「海王」、「绿皮书」等新片都可以观看到。十几个小时的飞机总不能一直看电影，还得兼顾倒时差的任务。
+之前没有调整时差的经验，加上平时作息比较规律，十三个小时的飞行过程里相对属于清醒状态。网络要收费，印象中比较贵，基本上干不了别的事情，除了看电影就是睡觉。如果经济允许，可以考虑升舱，坐经济舱飞十几小时简直了。到达 巴塞罗那 是当地时间早上8点，天气还算不错，就是有点过于「凉快」，完全没有夏天的感觉。上了摆渡车，直奔海关。
+当地的海关工作人员整体都不严肃，有些还带着耳机工作，有点不可思议。轮到我的时候，那位海关小哥看了我半天，感觉不像，盖章的时候特别犹豫，而且盖完章之后他应该是后悔了，还用类似验钞机的东西反复扫描我的签注，最后才说「Wei Fu, Welcome」。
+说句实在话，我当时的反应是这签证不会特么是假的吧，因为从广州签证处提交申请到拿到签证只花了「三天」，申请港澳通行证都没有那么快。还好，有惊无险。
+骑行友好的街道 虽然没有游玩整个 巴塞罗那 ，但是可以感觉到城市的大部分街道都是单行道。我在早高峰的时候打过车，车多但不算堵。
+说到打车，这里的打车算是一件高消费的服务了。我没有用 Uber/MyTaxi 软件打车，大部分都是通过酒店来约车，而这种约车是需要收调度费，大概2-3 欧左右吧。接近4公里左右的路程要 15 欧，贵！
+可能是养一辆车的费用比较高吧，这座城市的摩托车特别多，几乎随处可见。比较有意思的是摩托车车锁，他们的车锁是锁车把和车身，基本上不需要下蹲去锁车。
+虽然北京也有自行车道，但是大部分都被私家车占用了，对骑行的人来说极度不友好。这边的街道基本是两车道配一个自行车道，而汽车道和自行车道基本上严格分开，有些地方还有隔离带，对爱骑车的人来说真是太幸福了。
+如果你打开 Mobike，估计还会有惊喜哦。
+地铁，还不算太破 我住的酒店离地铁站不远，走几个街头就可以到达地铁站。在长达 15 个小时日照时间里，在拓展区里步行还算安全，也比较舒服。
+随处可见的遛狗人士，转角处的饮酒闲谈，还有无法欣赏的涂鸦。建筑都相对破旧，估计这十几年的变化也就是街上跑的私家车了。
+不管是去日本，还是来到 巴塞罗那，这边的地铁和火车一样，发车和到达时间点都是严格规定好的。这有个好处就是，每天都可以踩点出发。
+整个城市的地铁覆盖范围还是比较大，就是不同的区域由不同的公司运营，换乘基本上要出站重新购票了。如果不买套票，单程票就要 2.2 欧，贵的一匹。刷票进站后，给人感觉就是简陋，但不算太破。
+语言？No English 巴塞罗那 选择的时区和德国好像是一样的，都是东一区。在夏天，他们日照时间有 15 小时，到晚上 9 点天还是亮的。
+因为长时间日照的原因，他们物产是比较丰富的。但是想不明白的是，他们这边的特产是「西班牙火腿」。这火腿是腌制好几年而成，吃的时候切的越薄口感越好。主要这是生肉。。。
+和当地的「潮州佬」店主聊，他们当地喜欢吃「生」，日料店相对中餐而言要受欢迎些，估计是好吃「生」的食材吧。尝过 Tapa，也看过所谓的海鲜饭，还是觉得国内的菜还吃。
+出去吃饭更要命的是，点菜的时候没有图片，加上有些还没有英文注释，基本就瞎了。看不懂可以问吧，但是这边的人不太会说英语，也不愿意说。你可以想象下，机场里的工作人员会直接对你「No English」。这体验真的比去日本还糟糕。
+一直在「修」 城市比较小，到达的第一天就小转了一圈。
+因为加泰罗尼亚要闹独立，涂鸦就是这边的独特的风景线。从酒店走到港口，街道上的店铺都没开门。问了下当地国人，说这边的人比较懒，周末基本都享受去了，开便利店的基本都是非本地人。
+一路上都有海鸥到处飞，海鸥也不怕人，基本给啥吃啥，爆米花都吃！
+在港口溜达一会，就去看世界上最著名的「烂尾楼」 - 「圣家族大教堂」。这座大教堂修了 100 年，因为修的时间是在太长了，不知道是不是中间换了几个设计师，教堂每个角度的风格都不太一样。不过这也算是巴塞罗那著名景点了，只可惜当天去的时候没有门票了，没能进去。
+最后 这次出国没准备攻略，基本上是很佛系地逛了下，剩下大部分时间都在准备演讲内容。不过怎样，出远门才觉得国内是真TM方便。</description>
     </item>
     
     <item>
@@ -138,7 +204,16 @@
       <pubDate>Fri, 13 Apr 2018 00:00:00 +0000</pubDate>
       
       <guid>https://fuweid.com/post/2018-3years-career/</guid>
-      <description>毕业之后时间过的飞起。这三年没写过什么年度总结，记下流水账</description>
+      <description>不知不觉就过了三年，但是我还能很清楚地记得当时签卖身契的场景，只能说毕业之后时间过的飞起。这三年没写过什么年度总结，今天打算矫情一把，记下流水账。
+Vimer 有一次参加罗老师开发环境的分享会后，我就开始迷上 vim，并结束了 IDE/Sublime 之间的摇摆。从实用角度看，IDE 有着开箱即用的特点，这的确让人无法抗拒。但在平时的工作里，不同语言之间切换是常有的事，而且经常远程调试、常年沉浸在 Terminal 的我，vim 作为编辑器是一个不错的选择。加上韩国小哥 junegunn 开源神器 fzf ，解决了 vim 全文检索巨卡的痛点，这让我毫不犹豫地坚持使用 vim。没试过 fzf 的朋友不妨试试！
+我在习惯 HJKL 的同时，也在尝试回馈社区。还记得刚用 fzf.vim 的时候，当时的全文检索没有预览功能，相比于 Sublime，几乎没法用。所以在参加完公司第二个 Hackathon 之后的那个周末提了人生的第一个 PR。在这期间和韩国小哥 junegunn 来来回回讨论了快一个月，虽然最后失败了，但是我很享受这期间的沟通过程，毕竟能把自己的想法表达清楚是一件难得的事，因为非实时的沟通一旦出现理解偏差，时间成本将会急速上升。
+在后来使用了 vim-delve 插件，并帮助作者修复了几个 bug，也算是回馈社区了~
+MIT 6.828 在 16 年年初，非计算机专业的我选择了恶补操作系统：MIT 6.828。
+前前后后花了三个周末完成所有基本要求。课程设计者虽然尽可能地避免了琐碎的硬件操作，但是这三个周末还是非常的虐，毕竟 x86 架构有很多历史包袱，需要阅读 Intel x86 的开发文档。。。这三个周末完成的玩具内核让我重新认识了操作系统， 对我后续的工作帮助极大。
+不过你们会相信恶补的原因只是想知道 fork 怎么做到两个返回值 吗？
+Gopher 语言切换算是这三年里最大的变化吧。为了看 Docker 的代码而接触 Golang，但是在16年年底的时候公司并没有项目让我去实践，当时的我只能自己啃代码，等到真正实践的时候也差不多到17年年中了。
+去年七八月我偶然发现 PingCAP 有赠马克杯的 TiDB 重构活动，很幸运的是提的三个 PR 都被接受了，这也是我第一次在 Github 上贡献代码。再后来就是 Pouch，因为对容器的喜爱吧，几乎大部分的空闲时间都参与到 Pouch 上来了。
+除了代码以外，还因为 Golang 开源项目结识了一些朋友，不得不说真是名副其实的 G**hub。</description>
     </item>
     
     <item>
@@ -147,7 +222,11 @@
       <pubDate>Tue, 06 Feb 2018 00:00:00 +0800</pubDate>
       
       <guid>https://fuweid.com/post/2018-goroutine-scheduler-overview/</guid>
-      <description>基于 go1.9rc2 版本分析 go 调度细节</description>
+      <description>Goroutine 是 Golang 世界里的 Lightweight Thread 。
+Golang 在语言层面支持多线程，代码可以通过 go 关键字来启动 Goroutine ，调用者不需要关心调用栈的大小，函数上下文等等信息就可以完成并发或者并行操作，加快了我们的开发速度。 分析 Goroutine 调度有利于了解和分析 go binary 的工作状况，所以接下来的内容将分析 runtime 中关于 Goroutine 调度的逻辑。
+ 以下内容涉及到的代码是基于 go1.9rc2 版本。
+ 1. Scheduler Structure 整个调度模型由 Goroutine/Processor/Machine 以及全局调度信息 sched 组成。
+ Global Runnable Queue runqueue ---------------------------- | G_10 | G_11 | G_12 | ... ---------------------------- P_0 Local Runnable Queue +-----+ +-----+ --------------- | M_3 | ---- | P_0 | &amp;lt;=== | G_8 | G_9 | +-----+ +-----+ --------------- | +-----+ | G_3 | Running +-----+ P_1 Local Runnable Queue +-----+ +-----+ --------------- | M_4 | ---- | P_1 | &amp;lt;=== | G_6 | G_7 | +-----+ +-----+ --------------- | +-----+ | G_5 | Running +-----+ 1.</description>
     </item>
     
     <item>
@@ -156,7 +235,14 @@
       <pubDate>Wed, 15 Nov 2017 00:00:00 +0000</pubDate>
       
       <guid>https://fuweid.com/post/2017-protobuf-3-encoding/</guid>
-      <description>Protobuf 3.0 编码规则初探</description>
+      <description>Protobuf 是 G 厂开源的序列化数据的方法，可用来通信或者存储数据。它采用 IDL 描述数据接口，使得不同语言编写的程序可以根据同一接口通信。不同编程语言也可以根据 IDL 的描述来生成对应数据结构，该数据结构用来编解码。为此，G 厂为主流开发语言都提供代码生成器（即 protoc ）。
+为了更好地了解一些细节，本文将主要描述 Protobuf 3.0 的编码规则。 Protobuf 里面主要采用 Varint 和 Zig-Zag 的方式来对整型数字进行编码。在理解 Protobuf 之前，需要先了解这两种编码方式。
+ Protobuf 采用是 Little Endian 的方式编码。
+ 1. Varints int64, int32, uint64, uint32 都有固定的二进制位数。
+如果将这些数字序列化成二进制流的时候，需要额外空间告知接收方数据的长度。对于采用 int64, uint64 这两种类型的数据而言，如果大部分时间都只是使用较小的数值，那么会极大地浪费传输带宽和存储空间。针对这两个问题，Protobuf 采用 Varints 的编码方式。
+Varints 将源数据按照 7 bit 分组，每 7 bit 加 MSB (Most Significant Bit) 标识位来组成一个字节，其中 MSB 标识位用来判断是否存在后序分组。如果出现多组的情况，那么低有效位比特组优先。
+64 有效位为 7 bit，不需要额外的字节，所以 MSB 比特位为 0。
+64 = 0100 0000 =&amp;gt; 0100 0000 16657 有效位为 15 bit，需要分成三组字节，前两组字节为了提示还存在后续字节，所以前两组字节的 MSB 比特位为 1。</description>
     </item>
     
     <item>
@@ -165,7 +251,10 @@
       <pubDate>Mon, 05 Jun 2017 00:00:00 +0000</pubDate>
       
       <guid>https://fuweid.com/post/2017-go-interface-duck-typing/</guid>
-      <description>基于 go1.7rc6 版本分析 go interface 设计细节</description>
+      <description>Go 不需要像 Java 那样显式地使用 implement 说明某一数据类型实现了 interface，只要某一数据类型实现了 interface 所定义的方法名签，那么就称该数据类型实现了 interface。interface 的语言特性可以容易地做到接口定义和具体实现解耦分离，并将注意力转移到如何使用 interface ，而不是方法的具体实现，我们也称这种程序设计为 Duck Typing。文本将描述 Go 是如何通过 interface 来实现 Duck Typing。
+ 本文提供的源代码都是基于 go1.7rc6 版本。
+ 1. Duck Typing 了解实现原理之前，我们可以简单过一下 Go 的 Duck Typing 示例。
+package main type Ducker interface { Quack() } type Duck struct {} func (_ Duck) Quack() { println(&amp;quot;Quaaaaaack!&amp;quot;) } type Person struct {} func (_ Person) Quack() { println(&amp;quot;Aha?!&amp;quot;) } func inTheForest(d Ducker) { d.Quack() } func main() { inTheForest(Duck{}) inTheForest(Person{}) } // result: // Quaaaaaack!</description>
     </item>
     
     <item>
@@ -174,7 +263,13 @@
       <pubDate>Mon, 20 Mar 2017 00:00:00 +0800</pubDate>
       
       <guid>https://fuweid.com/post/2017-control-your-shell-script/</guid>
-      <description>set -euo pipefail 让 shell 脚本变得可控</description>
+      <description>刚开始接触 shell 脚本的时候，最痛苦的地方在于出了问题，却不容易定位问题。
+shell 脚本遇到错误，“大部分” 情况下都会继续执行剩下的命令，最后返回 Zero Exit Code 并不代表着结果正确。
+这让人很难发现问题，它不像其他脚本语言，遇到 语法错误 和 typo 等错误时便会立即退出。
+如果想要写出容易维护、容易 debug 的 shell 脚本，我们就需要让 shell 脚本变得可控。
+set -e 默认情况下，shell 脚本遇到错误并不会立即退出，它还是会继续执行剩下的命令。
+[root@localhost ~]# cat example #!/usr/bin/env bash # set -e sayhi # this command is not available. echo &amp;quot;sayhi&amp;quot; [root@localhost ~]# ./example ./example: line 4: sayhi: command not found sayhi 我们知道 Linux/Unix 用户等于系统的时候，内核会加载 .bashrc 或者 .bash_profile 里的配置。
+ 不同 shell 版本会使用不同的 rc/profile 文件，比如 zsh 版本的 rc 文件名是 .</description>
     </item>
     
     <item>
@@ -183,7 +278,10 @@
       <pubDate>Sun, 19 Mar 2017 00:00:00 +0800</pubDate>
       
       <guid>https://fuweid.com/post/2017-shebang-compatibility-version/</guid>
-      <description>shell 脚本兼容性以及版本控制</description>
+      <description>写脚本的时候通常会在脚本的开头加上 shebang, 系统会将这段内容作为解释器指令，比如 bash shell 脚本。
+$&amp;gt; cat example #!/usr/bin/bash echo &amp;quot;HaHa&amp;quot; $&amp;gt; chmod +x ./example $&amp;gt; ./example HaHa 只要为脚本添加了可执行的属性，那么内核在执行脚本的时候，会调用 shebang 描述的解释器来执行脚本。 ./exmaple 其实等价于 /usr/bin/bash ./example。shebang 描述的解释器需要写其绝对路径或者相对路径，因为内核并不会在用户设置的 PATH 里找解释器。关于 shebang，讨论最多的应该是 兼容性 和 版本控制 问题。
+兼容性 Linux 和 Unix 在存放解释器的具体路径不太一致，比如 Linux 会放到 /usr/bin/ 中，而 openBSD 会放到 /usr/local/bin/ 中。不同包管理器在安装解释器的时候，存放的位置也不尽相同。 当你在 Mac 上写了 shell 脚本，测试并提交到代码库。 结果等到部署的那一天，执行脚本的时候发现找不到解释器了。 为了解决这个问题，可以通过 env 来解决，因为它在 Linux 和 Unix 存放的位置相同。
+$&amp;gt; cat exmaple #!/usr/bin/env bash echo &amp;#34;HaHa&amp;#34; env 会在用户设置的 PATH 中查找解释器第一次出现的具体路径。 虽然办法比较 tricky，但是这种方式能解决脚本解释器的兼容性问题。</description>
     </item>
     
     <item>
@@ -192,7 +290,15 @@
       <pubDate>Fri, 17 Mar 2017 00:00:00 +0800</pubDate>
       
       <guid>https://fuweid.com/post/2017-netfilter-beginning/</guid>
-      <description>简单介绍 Netfilter 模块以及 iptables 的使用</description>
+      <description>Linux 内核在 2.4.x 版本中正式引入 Netfilter 模块，该模块负责网络数据包过滤和 Network Address Translation。 Netfilter 代表着一系列的 Hook ，被内核嵌入到 TCP/IP 协议栈中，数据包在穿梭协议栈时，Hook 会检查数据包，从而达到访问控制的作用。
+规则链 Netfilter 模块默认定义了五种类型的 Hook：
+ PREROUTING INPUT FORWARD OUTPUT POSTROUTING   在 Netfilter 里，Hook 也称为 Chain，规则链
+ 我们可以从数据包的来源和走向入手来进行分析这条五条规则链的设计。 首先，数据包按照来源可以分成 Incoming 和 Outgoing 这两种类型。 Incoming 数据包是指其他网卡发来的数据包。这类数据包可能直接奔向用户态的程序， 也有可能被内核转发到其他机器或者其他网卡上，这需要内核做路由判定。
+而 Outgoing 数据包是用户态程序准备要发送的数据包。 数据包到达内核之后，内核会为它选择合适的网卡和端口，在此之后便会一层层地穿过协议栈，内核在此过程之中会做出路由判定。
+ 一般情况下，客户端所使用的高端口号。在 Linux 下，我们可以通过 cat /proc/sys/net/ipv4/ip_local_port_range 查看系统会随机使用的端口号范围。
+ 需要注意的是，如果这是内网和外网之间的通信，内核会使用到 NAT 技术来对地址进行转化。 对于 Incoming 数据包而言，内核路由前需要对数据包进行 Destination NAT 转化。 同理，数据包在路由之后也需要做 Source NAT 转化。
+根据上面的分析，可以得到以下结论：
+ Incoming 数据包的目的地就在本地：PREROUTING -&amp;gt; INPUT Incoming 数据包需要转发：PREROUTING -&amp;gt; FORWARD -&amp;gt; POSTROUTING Outgoing 数据包：OUTPUT -&amp;gt; POSTROUTING  不同走向的数据包都必定会通过以上五个环节中的部分环节，只要系统管理员在五个环节中设置关卡，就可以做到系统的访问控制。</description>
     </item>
     
   </channel>

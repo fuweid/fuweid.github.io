@@ -1,12 +1,153 @@
-<!doctype html><html lang=en dir=auto><head><meta charset=utf-8><meta http-equiv=x-ua-compatible content="IE=edge"><meta name=viewport content="width=device-width,initial-scale=1,shrink-to-fit=no"><meta name=robots content="index, follow"><title>containerd 1.7: 垃圾回收的拓展 | fuweid</title><meta name=keywords content><meta name=description content="主要介绍下 containerd 垃圾回收机制"><meta name=author content><link rel=canonical href=https://fuweid.com/post/2023-containerd-17-gc/><link crossorigin=anonymous href=/assets/css/stylesheet.abc7c82c3d415a6df50430738d1cbcc4c76fea558bc5a0c830d3babf78167a35.css integrity="sha256-q8fILD1BWm31BDBzjRy8xMdv6lWLxaDIMNO6v3gWejU=" rel="preload stylesheet" as=style><script defer crossorigin=anonymous src=/assets/js/highlight.f413e19d0714851f6474e7ee9632408e58ac146fbdbe62747134bea2fa3415e0.js integrity="sha256-9BPhnQcUhR9kdOfuljJAjlisFG+9vmJ0cTS+ovo0FeA=" onload=hljs.initHighlightingOnLoad();></script><link rel=icon href=https://fuweid.com/favicon.jpg><link rel=icon type=image/png sizes=16x16 href=https://fuweid.com/favicon-16x16.png><link rel=icon type=image/png sizes=32x32 href=https://fuweid.com/favicon-32x32.png><link rel=apple-touch-icon href=https://fuweid.com/apple-touch-icon.png><link rel=mask-icon href=https://fuweid.com/safari-pinned-tab.svg><meta name=theme-color content="#2e2e33"><meta name=msapplication-TileColor content="#2e2e33"><noscript><style>#theme-toggle,.top-link{display:none}</style><style>@media(prefers-color-scheme:dark){:root{--theme: rgb(29, 30, 32);--entry: rgb(46, 46, 51);--primary: rgb(218, 218, 219);--secondary: rgb(155, 156, 157);--tertiary: rgb(65, 66, 68);--content: rgb(196, 196, 197);--hljs-bg: rgb(46, 46, 51);--code-bg: rgb(55, 56, 62);--border: rgb(51, 51, 51)}.list{background:var(--theme)}.list:not(.dark)::-webkit-scrollbar-track{background:0 0}.list:not(.dark)::-webkit-scrollbar-thumb{border-color:var(--theme)}}</style></noscript><script type=application/javascript>var doNotTrack=false;if(!doNotTrack){(function(i,s,o,g,r,a,m){i['GoogleAnalyticsObject']=r;i[r]=i[r]||function(){(i[r].q=i[r].q||[]).push(arguments)},i[r].l=1*new Date();a=s.createElement(o),m=s.getElementsByTagName(o)[0];a.async=1;a.src=g;m.parentNode.insertBefore(a,m)})(window,document,'script','https://www.google-analytics.com/analytics.js','ga');ga('create','G-1C7VLVHN52','auto');ga('send','pageview');}</script><meta property="og:title" content="containerd 1.7: 垃圾回收的拓展"><meta property="og:description" content="主要介绍下 containerd 垃圾回收机制"><meta property="og:type" content="article"><meta property="og:url" content="https://fuweid.com/post/2023-containerd-17-gc/"><meta property="article:section" content="post"><meta property="article:published_time" content="2023-03-19T19:48:45+08:00"><meta property="article:modified_time" content="2023-03-19T19:48:45+08:00"><meta property="og:site_name" content="fuweid"><meta name=twitter:card content="summary"><meta name=twitter:title content="containerd 1.7: 垃圾回收的拓展"><meta name=twitter:description content="主要介绍下 containerd 垃圾回收机制"><script type=application/ld+json>{"@context":"https://schema.org","@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"Posts","item":"https://fuweid.com/post/"},{"@type":"ListItem","position":2,"name":"containerd 1.7: 垃圾回收的拓展","item":"https://fuweid.com/post/2023-containerd-17-gc/"}]}</script><script type=application/ld+json>{"@context":"https://schema.org","@type":"BlogPosting","headline":"containerd 1.7: 垃圾回收的拓展","name":"containerd 1.7: 垃圾回收的拓展","description":"主要介绍下 containerd 垃圾回收机制","keywords":[],"articleBody":"之前和苦总/Ace 维护 pouch-container/containerd 的时候，我们遇到比较多的问题是资源泄漏，比如节点负载太高以至于无法 umount 容器根目录(容器 bundle 目录残留），内核 pidns 死锁问题导致容器进程僵尸态( cgroup 残留)，还有进程重启导致 CNI 网络资源泄漏等等。对于内核死锁等问题，重启可能是唯一的解决方案；而那些因为短期高负载或者进程重启导致的资源泄漏，它们需要从系统层面解决，至少应该让资源的创建者有机会去清理。\ncontainerd 它本身就具备垃圾回收能力，但它只关注内部资源的清理，比如镜像数据以及容器可写层。而 CNI 网络资源以及 containerd-shim 等外部资源并不在垃圾回收的管理范围内，这部分资源容易出现泄漏的情况，比如 GKE 平台的用户就多次遇到了 Containerd IP leakage : 直到 pause 容器创建之前，containerd 仅在内存里保持对网络资源的引用；在将网络资源绑定给 pod 以前，containerd 一旦被强制重启就会发生泄漏。当时 containerd 社区的处理方式是提前创建 pod 记录，以此来提前关联网络资源，并利用 kubelet 的垃圾回收机制来触发资源清理。问题倒是解决了，但该方案仅适用于 kubernetes 场景，最合理的方案应该是创建者应具备周期性的清理流程。\n考虑我们还有 shim 资源泄漏的问题，containerd 社区提了 Add collectible resources to metadata gc 方案来管理外部资源清理。在介绍这个方案之前，我想先介绍下 containerd 的垃圾清理机制。\n基于标签系统和 lease 构建的垃圾回收 containerd 核心插件 metadata 管理着容器和镜像数据，如下图所示，其中虚线方块代表着子模块，比如 Images 代表着 image service，它仅用来管理镜像名字和镜像 manifest 的映射关系，而镜像的 blob 数据和解压后的文件内容分别由 content service 和 snapshot service 管理；需要说明的是，container service 仅用来保存用于启动容器的配置信息，它并不负责管理容器进程的生命周期。\n上图的方向键代表着数据之间的关联性，但除了 image/container 可以直接指向其相关联的数据外，content 数据间的关系以及 content 和 snapshot 数据间的关系都将通过标签系统来维系。\n根据 OCI 镜像标准的定义，镜像 manifest 的数据内容会关联其配置信息 config 以及 layer 的数据。在 containerd content service 里，这些数据的关系将由标签 containerd.io/gc.ref.content. 来呈现，如下图的所示。\nbusybox:1.25 镜像名字关联着一个哈希值为 sha256:29f5d56d1… 的 manifest，而这个 manifest 身上有两个重要的标签，如下表所示，它们分别指向了 config 和 layer 哈希值。由于每一层 layer 数据都对应着一个 snapshot，而这些 snapshot ID 是来自 config 里的 diffID 所生成的 chainID。为了管理方便，containerd 在 config 上添加标签 containerd.io/gc.ref.snapshot.X 来关联最后一层 snapshot，其中 X 表示具体的 snapshotter 插件，比如 linux 平台常用的 overlayfs。\n   Key Value Ref     containerd.io/gc.ref.content.config sha256:e02e811dd… config   containerd.io/gc.ref.content.l.0 sha256:56bec22e3… layer     containerd.io/gc.ref.content.l.N 用来指向具体的镜像层，N 代表的是第几层。\n 现在我们回头看第一张图，container/image 的元数据就可以作为垃圾回收的 GC-Root，containerd 配合标签系统进行全局扫描，并通过 Tricolor 来获得正在使用的数据，那些没有被关联到的数据就可以被删除。\n比如我们将 redis:latest 镜像删除之后，redis:latest 镜像关联的 manifest sha256:78CF547… 没有可达的路径；同样地，redis:latest 镜像的 config sha256:B5CC793… 也没有可达路径。但图中的 redis:latest 镜像是基于 alpine:latest 构建，所以 redis:latest 镜像的第一层 sha256:3B87DCE… 将被保留；加上 Redis container 容器关联的可写层 Contaner Root 是基于 redis:latest 构建，因此垃圾回收仅会清理没有可达路径的 content 数据。\n如果在此基础上删除 Redis container，那么 Redis + Alpine 和 Container Root snapshot 将没有可达路径，它们也将会被垃圾回收清理。在这里也侧面解释了 为什么 containerd 允许用户删除正在被容器使用的镜像: 垃圾回收并不会真正去清理容器根目录所依赖的 snapshot，只有等到没有容器或者镜像引用时，containerd 才会真正去删除镜像相关的数据。\n前面提到了标签系统如何关联数据，那么你可能会问，containerd 垃圾回收流程会清理正在下载的镜像数据吗？毕竟调用 image service 关联 mainifest 是下载流程的最后步骤。如果没有 lease 关联，containerd 会清理正在下载的镜像数据。\n下载镜像是一个不可控的事务，它的耗时由镜像大小、网络带宽以及磁盘读写能力来决定。为了避免未关联的临时数据被删除，containerd 引入了 lease 数据作为新的 GC-Root。它和 image/container 数据平级，它所关联的 content/snapshot 不会被垃圾回收清理。因此下镜像的第一步就是去申请 lease。\n如上图所示，我中途取消了 golang:1.20.1 镜像的下载，其中一个 layer sha256:543368fb… 没有被清理掉，因为它已经被 lease 650284033-Pgbh 关联上了。一般情况下，lease 数据上都会有标签 containerd.io/gc.expire 来表明过期时间。过期之后，lease 和它关联的数据都会被 containerd 清理。如果我没有删除 lease，而是选择重新下载 golang:1.20.1 镜像，containerd 可以恢复取消前的状态，它具备 断点续传 的能力。\n新版本的拓展能力 前面提到的垃圾回收仅针对容器和镜像数据，并没有涉及其他资源。但标签系统足以将 metadata 定义的 GC-Root 资源关联到外部组件定义的资源信息，现在仅需要 containerd 提供垃圾回收的标记机会即可。 为此， containerd 社区为 metadata 插件引入了 GC Collector 插件接口，如下图所示。\n在标记 GC-Root 阶段，containerd 给予 GC Collector 三种方式标记:\n  第一种是在扫描 lease 资源的阶段。在扫描某一个 namespace 下的 lease 时，containerd 将通过 CollectionContext.Leased() 方法来告知插件: 请把当前 namespace 下所有跟这个 lease 有关的数据都通过 fn 回传回来。目前 streaming service 主要采用这种方式标记。\n  第二种是扫描 container/image 数据标签的阶段。Collector.ReferenceLabel() 告知了 containerd 它感兴趣的标签，这个标签以 containerd.io/gc.ref. 开头。比如 CNICollector 插件用来管理容器的网络资源，它维护容器和 netns 路径间的关联关系。当 container 数据创建时，它的 netns 路径为 /run/netns/demo，那么开发者可以为 container 数据添加一条标签 containerd.io/gc.ref.cni=/run/netns/demo。当 containerd 在扫描 container 数据时，它会将 /run/netns/demo 作为可达对象。\n  第三种是扫描完某一个 namespace 的路径发起点之后，containerd 会调用 CollectionContext.Active() 来告知插件：请把当前 namespace 下所有正在使用的数据通过 fn 回传回来。\n  当 containerd 标记完所有 GC-Root 后，它会扫描所有数据，并删除没有被关联到的数据；之后它将调用 CollectionContext.All() 来遍历插件维护的所有数据，并调用 CollectionContext.Remove() 来清理没被关联上的数据；最后调用 CollectionContext.Finish() 来结束本次清理。\n有了这个拓展包之后，理论上所有和容器相关的资源都可以被监控起来，比如开头提到的 CNI 网络资源、containerd-shim 进程，甚至是 containerd-shim 创建出来的 socket 文件。\n但需要明确的是，这个拓展包针对的是 containerd 开发者，并不是终端用户。\ncontainerd v2.0 计划 目前比较明确的是，由 AWS 开发者主导的 [Proposal] Add Networks Service Plugin 会重新改变现有 CRI 的网络管理方式。而像 shim process leaked when the host having high disk i/o usage 这些泄漏问题，可能会涉及到 Sandbox API 的改造，进展应该不会太快吧。\n最后 这次没有展开解释 containerd 如何清理 snapshotter 数据，个人觉得这部分设计还是不错的，感兴趣的开发者可以去看看这部分实现。这次就到这吧，下一篇会是 containerd 1.7 特性系列介绍的最后一篇。\n","wordCount":"379","inLanguage":"en","datePublished":"2023-03-19T19:48:45+08:00","dateModified":"2023-03-19T19:48:45+08:00","mainEntityOfPage":{"@type":"WebPage","@id":"https://fuweid.com/post/2023-containerd-17-gc/"},"publisher":{"@type":"Organization","name":"fuweid","logo":{"@type":"ImageObject","url":"https://fuweid.com/favicon.jpg"}}}</script></head><body id=top><script>if(localStorage.getItem("pref-theme")==="dark"){document.body.classList.add('dark');}else if(localStorage.getItem("pref-theme")==="light"){document.body.classList.remove('dark')}else if(window.matchMedia('(prefers-color-scheme: dark)').matches){document.body.classList.add('dark');}</script><header class=header><nav class=nav><div class=logo><a href=https://fuweid.com/ accesskey=h title="fuweid.com (Alt + H)">fuweid.com</a><div class=logo-switches><button id=theme-toggle accesskey=t title="(Alt + T)"><svg id="moon" xmlns="http://www.w3.org/2000/svg" width="24" height="18" viewBox="0 0 24 24" fill="none" stroke="currentcolor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1111.21 3 7 7 0 0021 12.79z"/></svg><svg id="sun" xmlns="http://www.w3.org/2000/svg" width="24" height="18" viewBox="0 0 24 24" fill="none" stroke="currentcolor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg></button></div></div><ul id=menu></ul></nav></header><main class=main><article class=post-single><header class=post-header><div class=breadcrumbs><a href=https://fuweid.com/>Home</a>&nbsp;»&nbsp;<a href=https://fuweid.com/post/>Posts</a></div><h1 class=post-title>containerd 1.7: 垃圾回收的拓展</h1><div class=post-description>主要介绍下 containerd 垃圾回收机制</div><div class=post-meta><span title="2023-03-19 19:48:45 +0800 HKT">March 19, 2023</span></div></header><div class=post-content><p>之前和苦总/Ace 维护 pouch-container/containerd 的时候，我们遇到比较多的问题是资源泄漏，比如节点负载太高以至于无法 umount 容器根目录(容器 bundle 目录残留），内核 pidns 死锁问题导致容器进程僵尸态( cgroup 残留)，还有进程重启导致 CNI 网络资源泄漏等等。对于内核死锁等问题，重启可能是唯一的解决方案；而那些因为短期高负载或者进程重启导致的资源泄漏，它们需要从系统层面解决，至少应该让资源的创建者有机会去清理。</p><p>containerd 它本身就具备垃圾回收能力，但它只关注内部资源的清理，比如镜像数据以及容器可写层。而 CNI 网络资源以及 containerd-shim 等外部资源并不在垃圾回收的管理范围内，这部分资源容易出现泄漏的情况，比如 GKE 平台的用户就多次遇到了 <a href=https://github.com/containerd/containerd/issues/5768>Containerd IP leakage</a> : 直到 pause 容器创建之前，containerd 仅在内存里保持对网络资源的引用；在将网络资源绑定给 pod 以前，containerd 一旦被强制重启就会发生泄漏。当时 containerd 社区的处理方式是提前创建 pod 记录，以此来提前关联网络资源，并利用 kubelet 的垃圾回收机制来触发资源清理。问题倒是解决了，但该方案仅适用于 kubernetes 场景，最合理的方案应该是创建者应具备周期性的清理流程。</p><p>考虑我们还有 shim 资源泄漏的问题，containerd 社区提了 <a href=https://github.com/containerd/containerd/pull/6804>Add collectible resources to metadata gc</a> 方案来管理外部资源清理。在介绍这个方案之前，我想先介绍下 containerd 的垃圾清理机制。</p><h2 id=基于标签系统和-lease-构建的垃圾回收>基于标签系统和 lease 构建的垃圾回收<a hidden class=anchor aria-hidden=true href=#基于标签系统和-lease-构建的垃圾回收>#</a></h2><p>containerd 核心插件 metadata 管理着容器和镜像数据，如下图所示，其中虚线方块代表着子模块，比如 Images 代表着 image service，它仅用来管理镜像名字和镜像 manifest 的映射关系，而镜像的 blob 数据和解压后的文件内容分别由 content service 和 snapshot service 管理；需要说明的是，container service 仅用来保存用于启动容器的配置信息，它并不负责管理容器进程的生命周期。</p><p><img loading=lazy src=/img/2023-containerd-17-gc/metadata-overview.png alt=metadata-overview></p><p>上图的方向键代表着数据之间的关联性，但除了 image/container 可以直接指向其相关联的数据外，content 数据间的关系以及 content 和 snapshot 数据间的关系都将通过标签系统来维系。</p><p>根据 OCI 镜像标准的定义，镜像 manifest 的数据内容会关联其配置信息 config 以及 layer 的数据。在 containerd content service 里，这些数据的关系将由标签 <strong>containerd.io/gc.ref.content.</strong> 来呈现，如下图的所示。</p><p><img loading=lazy src=/img/2023-containerd-17-gc/content-label.png alt=content-label></p><p><strong>busybox:1.25</strong> 镜像名字关联着一个哈希值为 <strong>sha256:29f5d56d1&mldr;</strong> 的 manifest，而这个 manifest 身上有两个重要的标签，如下表所示，它们分别指向了 config 和 layer 哈希值。由于每一层 layer 数据都对应着一个 snapshot，而这些 snapshot ID 是来自 config 里的 <a href=https://github.com/opencontainers/image-spec/blob/v1.0/config.md#layer-diffid>diffID</a> 所生成的 <a href=https://github.com/opencontainers/image-spec/blob/v1.0/config.md#layer-chainid>chainID</a>。为了管理方便，containerd 在 config 上添加标签 <strong>containerd.io/gc.ref.snapshot.X</strong> 来关联最后一层 snapshot，其中 <strong>X</strong> 表示具体的 snapshotter 插件，比如 linux 平台常用的 overlayfs。</p><table><thead><tr><th>Key</th><th>Value</th><th>Ref</th></tr></thead><tbody><tr><td>containerd.io/gc.ref.content.config</td><td>sha256:e02e811dd&mldr;</td><td>config</td></tr><tr><td>containerd.io/gc.ref.content.l.0</td><td>sha256:56bec22e3&mldr;</td><td>layer</td></tr></tbody></table><blockquote><p><strong>containerd.io/gc.ref.content.l.N</strong> 用来指向具体的镜像层，<strong>N</strong> 代表的是第几层。</p></blockquote><p>现在我们回头看第一张图，container/image 的元数据就可以作为垃圾回收的 GC-Root，containerd 配合标签系统进行全局扫描，并通过 <a href=https://en.wikipedia.org/wiki/Tracing_garbage_collection#Tri-color_marking>Tricolor</a> 来获得正在使用的数据，那些没有被关联到的数据就可以被删除。</p><p>比如我们将 redis:latest 镜像删除之后，redis:latest 镜像关联的 manifest <strong>sha256:78CF547&mldr;</strong> 没有可达的路径；同样地，redis:latest 镜像的 config <strong>sha256:B5CC793&mldr;</strong> 也没有可达路径。但图中的 redis:latest 镜像是基于 alpine:latest 构建，所以 redis:latest 镜像的第一层 <strong>sha256:3B87DCE&mldr;</strong> 将被保留；加上 <strong>Redis container</strong> 容器关联的可写层 <strong>Contaner Root</strong> 是基于 redis:latest 构建，因此垃圾回收仅会清理没有可达路径的 content 数据。</p><p><img loading=lazy src=/img/2023-containerd-17-gc/gc-demo-delete-redis.png alt=gc-demo-delete-redis>
-<img loading=lazy src=/img/2023-containerd-17-gc/gc-demo-delete-redis-content.png alt=gc-demo-delete-redis-content></p><p>如果在此基础上删除 Redis container，那么 <strong>Redis + Alpine</strong> 和 <strong>Container Root</strong> snapshot 将没有可达路径，它们也将会被垃圾回收清理。在这里也侧面解释了 <strong>为什么 containerd 允许用户删除正在被容器使用的镜像</strong>: 垃圾回收并不会真正去清理容器根目录所依赖的 snapshot，只有等到没有容器或者镜像引用时，containerd 才会真正去删除镜像相关的数据。</p><p><img loading=lazy src=/img/2023-containerd-17-gc/gc-demo-delete-container.png alt=gc-demo-delete-container></p><p>前面提到了标签系统如何关联数据，那么你可能会问，containerd 垃圾回收流程会清理正在下载的镜像数据吗？毕竟调用 image service 关联 mainifest 是下载流程的最后步骤。如果没有 <a href=https://en.wikipedia.org/wiki/Lease_(computer_science)>lease</a> 关联，containerd 会清理正在下载的镜像数据。</p><p>下载镜像是一个不可控的事务，它的耗时由镜像大小、网络带宽以及磁盘读写能力来决定。为了避免未关联的临时数据被删除，containerd 引入了 lease 数据作为新的 GC-Root。它和 image/container 数据平级，它所关联的 content/snapshot 不会被垃圾回收清理。因此下镜像的第一步就是去申请 lease。</p><p><img loading=lazy src=/img/2023-containerd-17-gc/ctr-lease-demo.png alt=ctr-lease-demo></p><p>如上图所示，我中途取消了 golang:1.20.1 镜像的下载，其中一个 layer <strong>sha256:543368fb&mldr;</strong> 没有被清理掉，因为它已经被 lease <strong>650284033-Pgbh</strong> 关联上了。一般情况下，lease 数据上都会有标签 <strong>containerd.io/gc.expire</strong> 来表明过期时间。过期之后，lease 和它关联的数据都会被 containerd 清理。如果我没有删除 lease，而是选择重新下载 golang:1.20.1 镜像，containerd 可以恢复取消前的状态，它具备 <strong>断点续传</strong> 的能力。</p><h2 id=新版本的拓展能力>新版本的拓展能力<a hidden class=anchor aria-hidden=true href=#新版本的拓展能力>#</a></h2><p>前面提到的垃圾回收仅针对容器和镜像数据，并没有涉及其他资源。但标签系统足以将 metadata 定义的 GC-Root 资源关联到外部组件定义的资源信息，现在仅需要 containerd 提供垃圾回收的标记机会即可。
-为此， containerd 社区为 metadata 插件引入了 GC Collector 插件接口，如下图所示。</p><p><img loading=lazy src=/img/2023-containerd-17-gc/collection-context.png alt=collection-context></p><p>在标记 GC-Root 阶段，containerd 给予 GC Collector 三种方式标记:</p><ul><li><p>第一种是在扫描 lease 资源的阶段。在扫描某一个 namespace 下的 lease 时，containerd 将通过 <strong>CollectionContext.Leased()</strong> 方法来告知插件: 请把当前 <strong>namespace</strong> 下所有跟这个 <strong>lease</strong> 有关的数据都通过 <strong>fn</strong> 回传回来。目前 streaming service 主要采用这种方式标记。</p></li><li><p>第二种是扫描 container/image 数据标签的阶段。<strong>Collector.ReferenceLabel()</strong> 告知了 containerd 它感兴趣的标签，这个标签以 <strong>containerd.io/gc.ref.</strong> 开头。比如 CNICollector 插件用来管理容器的网络资源，它维护容器和 netns 路径间的关联关系。当 container 数据创建时，它的 netns 路径为 <strong>/run/netns/demo</strong>，那么开发者可以为 container 数据添加一条标签 <strong>containerd.io/gc.ref.cni=/run/netns/demo</strong>。当 containerd 在扫描 container 数据时，它会将 <strong>/run/netns/demo</strong> 作为可达对象。</p></li><li><p>第三种是扫描完某一个 namespace 的路径发起点之后，containerd 会调用 <strong>CollectionContext.Active()</strong> 来告知插件：请把当前 <strong>namespace</strong> 下所有正在使用的数据通过 <strong>fn</strong> 回传回来。</p></li></ul><p>当 containerd 标记完所有 GC-Root 后，它会扫描所有数据，并删除没有被关联到的数据；之后它将调用 <strong>CollectionContext.All()</strong> 来遍历插件维护的所有数据，并调用 <strong>CollectionContext.Remove()</strong> 来清理没被关联上的数据；最后调用 <strong>CollectionContext.Finish()</strong> 来结束本次清理。</p><p>有了这个拓展包之后，理论上所有和容器相关的资源都可以被监控起来，比如开头提到的 CNI 网络资源、containerd-shim 进程，甚至是 containerd-shim 创建出来的 socket 文件。</p><p>但需要明确的是，这个拓展包针对的是 containerd 开发者，并不是终端用户。</p><h2 id=containerd-v20-计划>containerd v2.0 计划<a hidden class=anchor aria-hidden=true href=#containerd-v20-计划>#</a></h2><p>目前比较明确的是，由 AWS 开发者主导的 <a href=https://github.com/containerd/containerd/issues/7751>[Proposal] Add Networks Service Plugin</a> 会重新改变现有 CRI 的网络管理方式。而像 <a href=https://github.com/containerd/containerd/issues/7496>shim process leaked when the host having high disk i/o usage</a> 这些泄漏问题，可能会涉及到 <a href=https://github.com/containerd/containerd/issues/4131>Sandbox API</a> 的改造，进展应该不会太快吧。</p><h2 id=最后>最后<a hidden class=anchor aria-hidden=true href=#最后>#</a></h2><p>这次没有展开解释 containerd 如何清理 snapshotter 数据，个人觉得这部分设计还是不错的，感兴趣的开发者可以去看看这部分实现。这次就到这吧，下一篇会是 containerd 1.7 特性系列介绍的最后一篇。</p></div><footer class=post-footer><ul class=post-tags></ul><nav class=paginav><a class=prev href=https://fuweid.com/post/2023-08-sync-containerd-issue/><span class=title>« Prev</span><br><span>同步近期 containerd 的高频问题</span></a>
-<a class=next href=https://fuweid.com/post/2023-containerd-17-transfer-service/><span class=title>Next »</span><br><span>containerd 1.7: Image Transfer Service</span></a></nav></footer></article></main><footer class=footer><span>&copy; 2024 <a href=https://fuweid.com/>fuweid</a></span>
-<span>Powered by
-<a href=https://gohugo.io/ rel="noopener noreferrer" target=_blank>Hugo</a> &
-        <a href=https://github.com/adityatelange/hugo-PaperMod/ rel=noopener target=_blank>PaperMod</a></span></footer><a href=#top aria-label="go to top" title="Go to Top (Alt + G)" class=top-link id=top-link accesskey=g><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 12 6" fill="currentcolor"><path d="M12 6H0l6-6z"/></svg></a><script>let menu=document.getElementById('menu')
-if(menu){menu.scrollLeft=localStorage.getItem("menu-scroll-position");menu.onscroll=function(){localStorage.setItem("menu-scroll-position",menu.scrollLeft);}}
-document.querySelectorAll('a[href^="#"]').forEach(anchor=>{anchor.addEventListener("click",function(e){e.preventDefault();var id=this.getAttribute("href").substr(1);if(!window.matchMedia('(prefers-reduced-motion: reduce)').matches){document.querySelector(`[id='${decodeURIComponent(id)}']`).scrollIntoView({behavior:"smooth"});}else{document.querySelector(`[id='${decodeURIComponent(id)}']`).scrollIntoView();}
-if(id==="top"){history.replaceState(null,null," ");}else{history.pushState(null,null,`#${id}`);}});});</script><script>var mybutton=document.getElementById("top-link");window.onscroll=function(){if(document.body.scrollTop>800||document.documentElement.scrollTop>800){mybutton.style.visibility="visible";mybutton.style.opacity="1";}else{mybutton.style.visibility="hidden";mybutton.style.opacity="0";}};</script><script>document.getElementById("theme-toggle").addEventListener("click",()=>{if(document.body.className.includes("dark")){document.body.classList.remove('dark');localStorage.setItem("pref-theme",'light');}else{document.body.classList.add('dark');localStorage.setItem("pref-theme",'dark');}})</script><script>document.querySelectorAll('pre > code').forEach((codeblock)=>{const container=codeblock.parentNode.parentNode;const copybutton=document.createElement('button');copybutton.classList.add('copy-code');copybutton.innerHTML='copy';function copyingDone(){copybutton.innerHTML='copied!';setTimeout(()=>{copybutton.innerHTML='copy';},2000);}
-copybutton.addEventListener('click',(cb)=>{if('clipboard'in navigator){navigator.clipboard.writeText(codeblock.textContent);copyingDone();return;}
-const range=document.createRange();range.selectNodeContents(codeblock);const selection=window.getSelection();selection.removeAllRanges();selection.addRange(range);try{document.execCommand('copy');copyingDone();}catch(e){};selection.removeRange(range);});if(container.classList.contains("highlight")){container.appendChild(copybutton);}else if(container.parentNode.firstChild==container){}else if(codeblock.parentNode.parentNode.parentNode.parentNode.parentNode.nodeName=="TABLE"){codeblock.parentNode.parentNode.parentNode.parentNode.parentNode.appendChild(copybutton);}else{codeblock.parentNode.appendChild(copybutton);}});</script></body></html>
+<!DOCTYPE html>
+<html>
+    <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+    <title>
+        
+            Fu, Wei: containerd 1.7: 垃圾回收的拓展
+        
+    </title>
+
+    <meta property="og:title" content="containerd 1.7: 垃圾回收的拓展"/>
+    <meta property="og:Section" content="website"/>
+    <meta property="og:url" content="https://fuweid.com/post/2023-containerd-17-gc/"/>
+    <meta property="og:image" content="https://fuweid.com/favicon.jpg"/>
+    <meta property="og:site_name" content="Fu, Wei"/>
+    <meta property="og:description" content="主要介绍下 containerd 垃圾回收机制"/>
+
+    <link rel="stylesheet" href="/css/fontawesome/all.css" />
+    <link rel="stylesheet" href="/css/main.css" /> 
+    <link rel="stylesheet" href="/css/normalize.css">
+    <link rel="stylesheet" href="/css/prettify.css">
+    <link rel="shortcut icon" href="https://fuweid.com/favicon.jpg">
+    <link rel="icon" href="https://fuweid.com/favicon.jpg">
+    <script type="text/javascript" src="/js/prettify.js"></script>
+</head>
+
+
+    <body onload="doPrettify()">
+        <header>
+    <nav>
+        <ul class="home">
+            <li>
+                <a href="https://fuweid.com/">Fu, Wei</a>
+            </li>
+        </ul>
+        <ul class="social">
+            <li>
+                <a class="fab fa-github" href="https://github.com/fuweid" target="_blank"></a>
+            </li>
+            <li>
+                <a class="fab fa-twitter" href="https://twitter.com/fuweid89" target="_blank"></a>
+            </li>
+            <li>
+                <a class="fas fa-rss" href="https://fuweid.com//index.xml" target="_blank"></a>
+            </li>
+        </ul>
+    </nav>
+</header>
+
+
+        <div class="container">
+            <article class="single">
+                <h1 class="title"> containerd 1.7: 垃圾回收的拓展 </h1>
+                <h4 class="time"> March 19, 2023 </h4>
+                <p>之前和苦总/Ace 维护 pouch-container/containerd 的时候，我们遇到比较多的问题是资源泄漏，比如节点负载太高以至于无法 umount 容器根目录(容器 bundle 目录残留），内核 pidns 死锁问题导致容器进程僵尸态( cgroup 残留)，还有进程重启导致 CNI 网络资源泄漏等等。对于内核死锁等问题，重启可能是唯一的解决方案；而那些因为短期高负载或者进程重启导致的资源泄漏，它们需要从系统层面解决，至少应该让资源的创建者有机会去清理。</p>
+<p>containerd 它本身就具备垃圾回收能力，但它只关注内部资源的清理，比如镜像数据以及容器可写层。而 CNI 网络资源以及 containerd-shim 等外部资源并不在垃圾回收的管理范围内，这部分资源容易出现泄漏的情况，比如 GKE 平台的用户就多次遇到了 <a href="https://github.com/containerd/containerd/issues/5768">Containerd IP leakage</a> : 直到 pause 容器创建之前，containerd 仅在内存里保持对网络资源的引用；在将网络资源绑定给 pod 以前，containerd 一旦被强制重启就会发生泄漏。当时 containerd 社区的处理方式是提前创建 pod 记录，以此来提前关联网络资源，并利用 kubelet 的垃圾回收机制来触发资源清理。问题倒是解决了，但该方案仅适用于 kubernetes 场景，最合理的方案应该是创建者应具备周期性的清理流程。</p>
+<p>考虑我们还有 shim 资源泄漏的问题，containerd 社区提了 <a href="https://github.com/containerd/containerd/pull/6804">Add collectible resources to metadata gc</a> 方案来管理外部资源清理。在介绍这个方案之前，我想先介绍下 containerd 的垃圾清理机制。</p>
+<h2 id="基于标签系统和-lease-构建的垃圾回收">基于标签系统和 lease 构建的垃圾回收</h2>
+<p>containerd 核心插件 metadata 管理着容器和镜像数据，如下图所示，其中虚线方块代表着子模块，比如 Images 代表着 image service，它仅用来管理镜像名字和镜像 manifest 的映射关系，而镜像的 blob 数据和解压后的文件内容分别由 content service 和 snapshot service 管理；需要说明的是，container service 仅用来保存用于启动容器的配置信息，它并不负责管理容器进程的生命周期。</p>
+<p><img src="/img/2023-containerd-17-gc/metadata-overview.png" alt="metadata-overview"></p>
+<p>上图的方向键代表着数据之间的关联性，但除了 image/container 可以直接指向其相关联的数据外，content 数据间的关系以及 content 和 snapshot 数据间的关系都将通过标签系统来维系。</p>
+<p>根据 OCI 镜像标准的定义，镜像 manifest 的数据内容会关联其配置信息 config 以及 layer 的数据。在 containerd content service 里，这些数据的关系将由标签 <strong>containerd.io/gc.ref.content.</strong> 来呈现，如下图的所示。</p>
+<p><img src="/img/2023-containerd-17-gc/content-label.png" alt="content-label"></p>
+<p><strong>busybox:1.25</strong> 镜像名字关联着一个哈希值为 <strong>sha256:29f5d56d1&hellip;</strong> 的 manifest，而这个 manifest 身上有两个重要的标签，如下表所示，它们分别指向了 config 和 layer 哈希值。由于每一层 layer 数据都对应着一个 snapshot，而这些 snapshot ID 是来自 config 里的 <a href="https://github.com/opencontainers/image-spec/blob/v1.0/config.md#layer-diffid">diffID</a> 所生成的 <a href="https://github.com/opencontainers/image-spec/blob/v1.0/config.md#layer-chainid">chainID</a>。为了管理方便，containerd 在 config 上添加标签 <strong>containerd.io/gc.ref.snapshot.X</strong> 来关联最后一层 snapshot，其中 <strong>X</strong> 表示具体的 snapshotter 插件，比如 linux 平台常用的 overlayfs。</p>
+<table>
+<thead>
+<tr>
+<th>Key</th>
+<th>Value</th>
+<th>Ref</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>containerd.io/gc.ref.content.config</td>
+<td>sha256:e02e811dd&hellip;</td>
+<td>config</td>
+</tr>
+<tr>
+<td>containerd.io/gc.ref.content.l.0</td>
+<td>sha256:56bec22e3&hellip;</td>
+<td>layer</td>
+</tr>
+</tbody>
+</table>
+<blockquote>
+<p><strong>containerd.io/gc.ref.content.l.N</strong> 用来指向具体的镜像层，<strong>N</strong> 代表的是第几层。</p>
+</blockquote>
+<p>现在我们回头看第一张图，container/image 的元数据就可以作为垃圾回收的 GC-Root，containerd 配合标签系统进行全局扫描，并通过 <a href="https://en.wikipedia.org/wiki/Tracing_garbage_collection#Tri-color_marking">Tricolor</a> 来获得正在使用的数据，那些没有被关联到的数据就可以被删除。</p>
+<p>比如我们将 redis:latest 镜像删除之后，redis:latest 镜像关联的 manifest <strong>sha256:78CF547&hellip;</strong> 没有可达的路径；同样地，redis:latest 镜像的 config <strong>sha256:B5CC793&hellip;</strong> 也没有可达路径。但图中的 redis:latest 镜像是基于 alpine:latest 构建，所以 redis:latest 镜像的第一层 <strong>sha256:3B87DCE&hellip;</strong> 将被保留；加上 <strong>Redis container</strong> 容器关联的可写层 <strong>Contaner Root</strong> 是基于 redis:latest 构建，因此垃圾回收仅会清理没有可达路径的 content 数据。</p>
+<p><img src="/img/2023-containerd-17-gc/gc-demo-delete-redis.png" alt="gc-demo-delete-redis">
+<img src="/img/2023-containerd-17-gc/gc-demo-delete-redis-content.png" alt="gc-demo-delete-redis-content"></p>
+<p>如果在此基础上删除 Redis container，那么 <strong>Redis + Alpine</strong> 和 <strong>Container Root</strong> snapshot 将没有可达路径，它们也将会被垃圾回收清理。在这里也侧面解释了 <strong>为什么 containerd 允许用户删除正在被容器使用的镜像</strong>: 垃圾回收并不会真正去清理容器根目录所依赖的 snapshot，只有等到没有容器或者镜像引用时，containerd 才会真正去删除镜像相关的数据。</p>
+<p><img src="/img/2023-containerd-17-gc/gc-demo-delete-container.png" alt="gc-demo-delete-container"></p>
+<p>前面提到了标签系统如何关联数据，那么你可能会问，containerd 垃圾回收流程会清理正在下载的镜像数据吗？毕竟调用 image service 关联 mainifest 是下载流程的最后步骤。如果没有 <a href="https://en.wikipedia.org/wiki/Lease_(computer_science)">lease</a> 关联，containerd 会清理正在下载的镜像数据。</p>
+<p>下载镜像是一个不可控的事务，它的耗时由镜像大小、网络带宽以及磁盘读写能力来决定。为了避免未关联的临时数据被删除，containerd 引入了 lease 数据作为新的 GC-Root。它和 image/container 数据平级，它所关联的 content/snapshot 不会被垃圾回收清理。因此下镜像的第一步就是去申请 lease。</p>
+<p><img src="/img/2023-containerd-17-gc/ctr-lease-demo.png" alt="ctr-lease-demo"></p>
+<p>如上图所示，我中途取消了 golang:1.20.1 镜像的下载，其中一个 layer <strong>sha256:543368fb&hellip;</strong> 没有被清理掉，因为它已经被 lease <strong>650284033-Pgbh</strong> 关联上了。一般情况下，lease 数据上都会有标签 <strong>containerd.io/gc.expire</strong> 来表明过期时间。过期之后，lease 和它关联的数据都会被 containerd 清理。如果我没有删除 lease，而是选择重新下载 golang:1.20.1 镜像，containerd 可以恢复取消前的状态，它具备 <strong>断点续传</strong> 的能力。</p>
+<h2 id="新版本的拓展能力">新版本的拓展能力</h2>
+<p>前面提到的垃圾回收仅针对容器和镜像数据，并没有涉及其他资源。但标签系统足以将 metadata 定义的 GC-Root 资源关联到外部组件定义的资源信息，现在仅需要 containerd 提供垃圾回收的标记机会即可。
+为此， containerd 社区为 metadata 插件引入了 GC Collector 插件接口，如下图所示。</p>
+<p><img src="/img/2023-containerd-17-gc/collection-context.png" alt="collection-context"></p>
+<p>在标记 GC-Root 阶段，containerd 给予 GC Collector 三种方式标记:</p>
+<ul>
+<li>
+<p>第一种是在扫描 lease 资源的阶段。在扫描某一个 namespace 下的 lease 时，containerd 将通过 <strong>CollectionContext.Leased()</strong> 方法来告知插件: 请把当前 <strong>namespace</strong> 下所有跟这个 <strong>lease</strong> 有关的数据都通过 <strong>fn</strong> 回传回来。目前 streaming service 主要采用这种方式标记。</p>
+</li>
+<li>
+<p>第二种是扫描 container/image 数据标签的阶段。<strong>Collector.ReferenceLabel()</strong> 告知了 containerd 它感兴趣的标签，这个标签以 <strong>containerd.io/gc.ref.</strong> 开头。比如 CNICollector 插件用来管理容器的网络资源，它维护容器和 netns 路径间的关联关系。当 container 数据创建时，它的 netns 路径为 <strong>/run/netns/demo</strong>，那么开发者可以为 container 数据添加一条标签 <strong>containerd.io/gc.ref.cni=/run/netns/demo</strong>。当 containerd 在扫描 container 数据时，它会将 <strong>/run/netns/demo</strong> 作为可达对象。</p>
+</li>
+<li>
+<p>第三种是扫描完某一个 namespace 的路径发起点之后，containerd 会调用 <strong>CollectionContext.Active()</strong> 来告知插件：请把当前 <strong>namespace</strong> 下所有正在使用的数据通过 <strong>fn</strong> 回传回来。</p>
+</li>
+</ul>
+<p>当 containerd 标记完所有 GC-Root 后，它会扫描所有数据，并删除没有被关联到的数据；之后它将调用 <strong>CollectionContext.All()</strong> 来遍历插件维护的所有数据，并调用 <strong>CollectionContext.Remove()</strong> 来清理没被关联上的数据；最后调用 <strong>CollectionContext.Finish()</strong> 来结束本次清理。</p>
+<p>有了这个拓展包之后，理论上所有和容器相关的资源都可以被监控起来，比如开头提到的 CNI 网络资源、containerd-shim 进程，甚至是 containerd-shim 创建出来的 socket 文件。</p>
+<p>但需要明确的是，这个拓展包针对的是 containerd 开发者，并不是终端用户。</p>
+<h2 id="containerd-v20-计划">containerd v2.0 计划</h2>
+<p>目前比较明确的是，由 AWS 开发者主导的 <a href="https://github.com/containerd/containerd/issues/7751">[Proposal] Add Networks Service Plugin</a> 会重新改变现有 CRI 的网络管理方式。而像 <a href="https://github.com/containerd/containerd/issues/7496">shim process leaked when the host having high disk i/o usage</a> 这些泄漏问题，可能会涉及到 <a href="https://github.com/containerd/containerd/issues/4131">Sandbox API</a> 的改造，进展应该不会太快吧。</p>
+<h2 id="最后">最后</h2>
+<p>这次没有展开解释 containerd 如何清理 snapshotter 数据，个人觉得这部分设计还是不错的，感兴趣的开发者可以去看看这部分实现。这次就到这吧，下一篇会是 containerd 1.7 特性系列介绍的最后一篇。</p>
+
+            </article>
+        </div>
+
+        <footer>
+    &copy; 2024 Fu Wei
+</footer>
+
+<script>
+    function doPrettify(){
+        pres=document.getElementsByTagName('pre');
+        for (i=0; i < pres.length; i++) {
+            pres[i].className+=" prettyprint";
+        }
+        prettyPrint();
+    }
+</script>
+
+
+<script async src="https://www.googletagmanager.com/gtag/js?id=G-1C7VLVHN52"></script>
+<script>
+  window.dataLayer = window.dataLayer || [];
+  function gtag(){dataLayer.push(arguments);}
+  gtag('js', new Date());
+
+  gtag('config', 'G-1C7VLVHN52');
+</script>
+
+    </body>
+</html>

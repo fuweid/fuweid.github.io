@@ -1,78 +1,138 @@
-<!doctype html><html lang=en dir=auto><head><meta charset=utf-8><meta http-equiv=x-ua-compatible content="IE=edge"><meta name=viewport content="width=device-width,initial-scale=1,shrink-to-fit=no"><meta name=robots content="index, follow"><title>可以同时对一个 go string 进行读写操作吗？ | fuweid</title><meta name=keywords content><meta name=description content="panic or not?"><meta name=author content><link rel=canonical href=https://fuweid.com/post/2020-go-string-data-race/><link crossorigin=anonymous href=/assets/css/stylesheet.abc7c82c3d415a6df50430738d1cbcc4c76fea558bc5a0c830d3babf78167a35.css integrity="sha256-q8fILD1BWm31BDBzjRy8xMdv6lWLxaDIMNO6v3gWejU=" rel="preload stylesheet" as=style><script defer crossorigin=anonymous src=/assets/js/highlight.f413e19d0714851f6474e7ee9632408e58ac146fbdbe62747134bea2fa3415e0.js integrity="sha256-9BPhnQcUhR9kdOfuljJAjlisFG+9vmJ0cTS+ovo0FeA=" onload=hljs.initHighlightingOnLoad();></script><link rel=icon href=https://fuweid.com/favicon.jpg><link rel=icon type=image/png sizes=16x16 href=https://fuweid.com/favicon-16x16.png><link rel=icon type=image/png sizes=32x32 href=https://fuweid.com/favicon-32x32.png><link rel=apple-touch-icon href=https://fuweid.com/apple-touch-icon.png><link rel=mask-icon href=https://fuweid.com/safari-pinned-tab.svg><meta name=theme-color content="#2e2e33"><meta name=msapplication-TileColor content="#2e2e33"><noscript><style>#theme-toggle,.top-link{display:none}</style><style>@media(prefers-color-scheme:dark){:root{--theme: rgb(29, 30, 32);--entry: rgb(46, 46, 51);--primary: rgb(218, 218, 219);--secondary: rgb(155, 156, 157);--tertiary: rgb(65, 66, 68);--content: rgb(196, 196, 197);--hljs-bg: rgb(46, 46, 51);--code-bg: rgb(55, 56, 62);--border: rgb(51, 51, 51)}.list{background:var(--theme)}.list:not(.dark)::-webkit-scrollbar-track{background:0 0}.list:not(.dark)::-webkit-scrollbar-thumb{border-color:var(--theme)}}</style></noscript><script type=application/javascript>var doNotTrack=false;if(!doNotTrack){(function(i,s,o,g,r,a,m){i['GoogleAnalyticsObject']=r;i[r]=i[r]||function(){(i[r].q=i[r].q||[]).push(arguments)},i[r].l=1*new Date();a=s.createElement(o),m=s.getElementsByTagName(o)[0];a.async=1;a.src=g;m.parentNode.insertBefore(a,m)})(window,document,'script','https://www.google-analytics.com/analytics.js','ga');ga('create','G-1C7VLVHN52','auto');ga('send','pageview');}</script><meta property="og:title" content="可以同时对一个 go string 进行读写操作吗？"><meta property="og:description" content="panic or not?"><meta property="og:type" content="article"><meta property="og:url" content="https://fuweid.com/post/2020-go-string-data-race/"><meta property="article:section" content="post"><meta property="article:published_time" content="2020-05-30T00:00:00+08:00"><meta property="article:modified_time" content="2020-05-30T00:00:00+08:00"><meta property="og:site_name" content="fuweid"><meta name=twitter:card content="summary"><meta name=twitter:title content="可以同时对一个 go string 进行读写操作吗？"><meta name=twitter:description content="panic or not?"><script type=application/ld+json>{"@context":"https://schema.org","@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"Posts","item":"https://fuweid.com/post/"},{"@type":"ListItem","position":2,"name":"可以同时对一个 go string 进行读写操作吗？","item":"https://fuweid.com/post/2020-go-string-data-race/"}]}</script><script type=application/ld+json>{"@context":"https://schema.org","@type":"BlogPosting","headline":"可以同时对一个 go string 进行读写操作吗？","name":"可以同时对一个 go string 进行读写操作吗？","description":"panic or not?","keywords":[],"articleBody":"写过 Go 代码的同学都知道，在程序内启动多个 goroutine 处理任务是很常见的事情， 启动一个 goroutine 要比启动一个线程简单的多。当多个 goroutine 同时处理同一份数据时， 我们应该在代码中加入同步机制，保证多个 goroutine 按照一定顺序来访问数据， 不然就会出现 data race。 最常见的例子如下，同时写操作 map 数据会导致程序 panic，即使操作的是不同 key：\n// example 1  package main func main() { for { c := make(chan bool) m := make(map[string]string) go func() { m[\"1\"] = \"a\" // First conflicting access.  c  true }() m[\"2\"] = \"b\" // Second conflicting access.  c } } 那么下面的代码也会 panic 吗？\n// example 2 // 1 package main 2 3 import \"sync\" 4 5 func main() { 6 var wg sync.WaitGroup 7 8 for { 9 var s string 10 var r []byte 11 12 wg.Add(2) 13 14 // goroutine 1: update string s 15 go func() { 16 defer wg.Done() 17 s = \"panic?\" 18 }() 19 20 // goroutine 2: read string s 21 go func() { 22 defer wg.Done() 23 r = append(r, s...) 24 }() 25 26 wg.Wait() 27 } 28 } 答案稍后揭晓，现在先看下 Go Runtime 下是如何描述 string 数据: 一个 string 有两个 字段，str 用来存储长度为 len 的字符串。那么 string 的赋值会是原子操作吗？\n// https://github.com/golang/go/tree/release-branch.go1.13/src/runtime/string.go  type stringStruct struct { str unsafe.Pointer len int } // 为了防止编译器优化带来影响，需要在下面的代码里引入 print 和额外的 goroutine， // 保证在汇编结果里就可以看到实际的字符串赋值语句了。 // // cat -n main.go 1 package main 2 3 func main() { 4 var s string 5 go func() { 6 s = \"I am string\" 7 }() 8 print(s) 9 } 为了查看具体 string 赋值代码，这里需要使用 go tool compile -S ./main.go 来获 取汇编结果。在下面的输出结果中，s = \"I am string\" 赋值语句会被拆成两部分: 先 更新字符串的长度 len 字段, 再更新具体的字符串内容到 str 字段。\n\"\".main.func1 STEXT size=89 args=0x8 locals=0x8 0x0000 00000 (./main.go:5) TEXT \"\".main.func1(SB), ABIInternal, $8-8 0x0000 00000 (./main.go:5) MOVQ (TLS), CX 0x0009 00009 (./main.go:5) CMPQ SP, 16(CX) 0x000d 00013 (./main.go:5) JLS 82 0x000f 00015 (./main.go:5) SUBQ $8, SP 0x0013 00019 (./main.go:5) MOVQ BP, (SP) 0x0017 00023 (./main.go:5) LEAQ (SP), BP 0x001b 00027 (./main.go:5) FUNCDATA $0, gclocals·1a65e721a2ccc325b382662e7ffee780(SB) 0x001b 00027 (./main.go:5) FUNCDATA $1, gclocals·69c1753bd5f81501d95132d08af04464(SB) 0x001b 00027 (./main.go:5) FUNCDATA $2, gclocals·39825eea4be6e41a70480a53a624f97b(SB) 0x001b 00027 (./main.go:6) PCDATA $0, $1 0x001b 00027 (./main.go:6) PCDATA $1, $1 0x001b 00027 (./main.go:6) MOVQ \"\".\u0026s+16(SP), DI 先更新长度 0x0020 00032 (./main.go:6) MOVQ $11, 8(DI) 0x0028 00040 (./main.go:6) PCDATA $0, $-2 0x0028 00040 (./main.go:6) PCDATA $1, $-2 0x0028 00040 (./main.go:6) CMPL runtime.writeBarrier(SB), $0 0x002f 00047 (./main.go:6) JNE 68 再赋值内容 0x0031 00049 (./main.go:6) LEAQ go.string.\"I am string\"(SB), AX 0x0038 00056 (./main.go:6) MOVQ AX, (DI) 0x003b 00059 (./main.go:7) MOVQ (SP), BP 0x003f 00063 (./main.go:7) ADDQ $8, SP 0x0043 00067 (./main.go:7) RET 0x0044 00068 (./main.go:6) LEAQ go.string.\"I am string\"(SB), AX 0x004b 00075 (./main.go:6) CALL runtime.gcWriteBarrier(SB) 0x0050 00080 (./main.go:6) JMP 59 0x0052 00082 (./main.go:6) NOP 0x0052 00082 (./main.go:5) PCDATA $1, $-1 0x0052 00082 (./main.go:5) PCDATA $0, $-1 0x0052 00082 (./main.go:5) CALL runtime.morestack_noctxt(SB) 0x0057 00087 (./main.go:5) JMP 0  NOTE: runtime.xxxBarrier 是 Go 编译器为垃圾回收生成的代码，可以忽略。\n 回到一开始的问题 example 2 代码片段，r = append(r, s...) 采用 memmove 方法从字符串 s 拷贝 len(s) 个字节到 r 里。由于 s = \"panic?\" 赋值和 append 读 操作是同时进行：假设 s.len 已经被更新成 6 ，但是 s.str 还是 nil 状态，这个时候 正好执行了 append 的操作，直接读取空指针必定会 panic。\n// 其中一种可能的执行顺序 goruntine 1: set s.len = len(\"panic?\") # 6 字节 goruntine 2: r = append(r, s...) # 将从 s.str 中拷贝 6 字节，但 s.str = nil goroutine 1: set s.str = \"panic?\" // part of example 2 // (...) 14 // goroutine 1: update string s 15 go func() { 16 defer wg.Done() 17 s = \"panic?\" 18 }() 19 20 // goroutine 2: read string s 21 go func() { 22 defer wg.Done() 23 r = append(r, s...) 24 }() (...) 除了 append 这种场景以外，字符串的比较同样需要 len 和 str 一致。如果在执行读操作 时，str 实际存储的数据长度比 len 短，程序就会 panic。所以避免 data race 最好方式 就是采用合适的同步机制，这来自 Go 团队给出的最佳实践：\n Programs that modify data being simultaneously accessed by multiple goroutines must serialize such access.\nfrom https://golang.org/ref/mem Advice section\n ","wordCount":"584","inLanguage":"en","datePublished":"2020-05-30T00:00:00+08:00","dateModified":"2020-05-30T00:00:00+08:00","mainEntityOfPage":{"@type":"WebPage","@id":"https://fuweid.com/post/2020-go-string-data-race/"},"publisher":{"@type":"Organization","name":"fuweid","logo":{"@type":"ImageObject","url":"https://fuweid.com/favicon.jpg"}}}</script></head><body id=top><script>if(localStorage.getItem("pref-theme")==="dark"){document.body.classList.add('dark');}else if(localStorage.getItem("pref-theme")==="light"){document.body.classList.remove('dark')}else if(window.matchMedia('(prefers-color-scheme: dark)').matches){document.body.classList.add('dark');}</script><header class=header><nav class=nav><div class=logo><a href=https://fuweid.com/ accesskey=h title="fuweid.com (Alt + H)">fuweid.com</a><div class=logo-switches><button id=theme-toggle accesskey=t title="(Alt + T)"><svg id="moon" xmlns="http://www.w3.org/2000/svg" width="24" height="18" viewBox="0 0 24 24" fill="none" stroke="currentcolor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1111.21 3 7 7 0 0021 12.79z"/></svg><svg id="sun" xmlns="http://www.w3.org/2000/svg" width="24" height="18" viewBox="0 0 24 24" fill="none" stroke="currentcolor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg></button></div></div><ul id=menu></ul></nav></header><main class=main><article class=post-single><header class=post-header><div class=breadcrumbs><a href=https://fuweid.com/>Home</a>&nbsp;»&nbsp;<a href=https://fuweid.com/post/>Posts</a></div><h1 class=post-title>可以同时对一个 go string 进行读写操作吗？</h1><div class=post-description>panic or not?</div><div class=post-meta><span title="2020-05-30 00:00:00 +0800 HKT">May 30, 2020</span></div></header><div class=post-content><p>写过 Go 代码的同学都知道，在程序内启动多个 goroutine 处理任务是很常见的事情，
+<!DOCTYPE html>
+<html>
+    <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+    <title>
+        
+            Fu, Wei: 可以同时对一个 go string 进行读写操作吗？
+        
+    </title>
+
+    <meta property="og:title" content="可以同时对一个 go string 进行读写操作吗？"/>
+    <meta property="og:Section" content="website"/>
+    <meta property="og:url" content="https://fuweid.com/post/2020-go-string-data-race/"/>
+    <meta property="og:image" content="https://fuweid.com/favicon.jpg"/>
+    <meta property="og:site_name" content="Fu, Wei"/>
+    <meta property="og:description" content="panic or not?"/>
+
+    <link rel="stylesheet" href="/css/fontawesome/all.css" />
+    <link rel="stylesheet" href="/css/main.css" /> 
+    <link rel="stylesheet" href="/css/normalize.css">
+    <link rel="stylesheet" href="/css/prettify.css">
+    <link rel="shortcut icon" href="https://fuweid.com/favicon.jpg">
+    <link rel="icon" href="https://fuweid.com/favicon.jpg">
+    <script type="text/javascript" src="/js/prettify.js"></script>
+</head>
+
+
+    <body onload="doPrettify()">
+        <header>
+    <nav>
+        <ul class="home">
+            <li>
+                <a href="https://fuweid.com/">Fu, Wei</a>
+            </li>
+        </ul>
+        <ul class="social">
+            <li>
+                <a class="fab fa-github" href="https://github.com/fuweid" target="_blank"></a>
+            </li>
+            <li>
+                <a class="fab fa-twitter" href="https://twitter.com/fuweid89" target="_blank"></a>
+            </li>
+            <li>
+                <a class="fas fa-rss" href="https://fuweid.com//index.xml" target="_blank"></a>
+            </li>
+        </ul>
+    </nav>
+</header>
+
+
+        <div class="container">
+            <article class="single">
+                <h1 class="title"> 可以同时对一个 go string 进行读写操作吗？ </h1>
+                <h4 class="time"> May 30, 2020 </h4>
+                <p>写过 Go 代码的同学都知道，在程序内启动多个 goroutine 处理任务是很常见的事情，
 启动一个 goroutine 要比启动一个线程简单的多。当多个 goroutine 同时处理同一份数据时，
 我们应该在代码中加入同步机制，保证多个 goroutine 按照一定顺序来访问数据，
 不然就会出现 data race。
-最常见的例子如下，同时写操作 map 数据会导致程序 panic，即使操作的是不同 key：</p><div class=highlight><pre class=chroma><code class=language-go data-lang=go><span class=c1>// example 1
-</span><span class=c1></span>
-<span class=kn>package</span> <span class=nx>main</span>
+最常见的例子如下，同时写操作 map 数据会导致程序 panic，即使操作的是不同 key：</p>
+<div class="highlight"><pre class="chroma"><code class="language-go" data-lang="go"><span class="c1">// example 1
+</span><span class="c1"></span>
+<span class="kn">package</span> <span class="nx">main</span>
 
-<span class=kd>func</span> <span class=nf>main</span><span class=p>()</span> <span class=p>{</span>
-        <span class=k>for</span> <span class=p>{</span>
-                <span class=nx>c</span> <span class=o>:=</span> <span class=nb>make</span><span class=p>(</span><span class=kd>chan</span> <span class=kt>bool</span><span class=p>)</span>
-                <span class=nx>m</span> <span class=o>:=</span> <span class=nb>make</span><span class=p>(</span><span class=kd>map</span><span class=p>[</span><span class=kt>string</span><span class=p>]</span><span class=kt>string</span><span class=p>)</span>
-                <span class=k>go</span> <span class=kd>func</span><span class=p>()</span> <span class=p>{</span>
-                        <span class=nx>m</span><span class=p>[</span><span class=s>&#34;1&#34;</span><span class=p>]</span> <span class=p>=</span> <span class=s>&#34;a&#34;</span> <span class=c1>// First conflicting access.
-</span><span class=c1></span>                        <span class=nx>c</span> <span class=o>&lt;-</span> <span class=kc>true</span>
-                <span class=p>}()</span>
-                <span class=nx>m</span><span class=p>[</span><span class=s>&#34;2&#34;</span><span class=p>]</span> <span class=p>=</span> <span class=s>&#34;b&#34;</span> <span class=c1>// Second conflicting access.
-</span><span class=c1></span>                <span class=o>&lt;-</span><span class=nx>c</span>
-        <span class=p>}</span>
-<span class=p>}</span>
-</code></pre></div><p>那么下面的代码也会 panic 吗？</p><div class=highlight><pre class=chroma><code class=language-go data-lang=go><span class=c1>// example 2
-</span><span class=c1>//
-</span><span class=c1></span><span class=mi>1</span>  <span class=kn>package</span> <span class=nx>main</span>
-<span class=mi>2</span>
-<span class=mi>3</span>  <span class=kn>import</span> <span class=s>&#34;sync&#34;</span>
-<span class=mi>4</span>
-<span class=mi>5</span>  <span class=kd>func</span> <span class=nf>main</span><span class=p>()</span> <span class=p>{</span>
-<span class=mi>6</span>          <span class=kd>var</span> <span class=nx>wg</span> <span class=nx>sync</span><span class=p>.</span><span class=nx>WaitGroup</span>
-<span class=mi>7</span>
-<span class=mi>8</span>          <span class=k>for</span> <span class=p>{</span>
-<span class=mi>9</span>                  <span class=kd>var</span> <span class=nx>s</span> <span class=kt>string</span>
-<span class=mi>10</span>                  <span class=kd>var</span> <span class=nx>r</span> <span class=p>[]</span><span class=kt>byte</span>
-<span class=mi>11</span>
-<span class=mi>12</span>                  <span class=nx>wg</span><span class=p>.</span><span class=nf>Add</span><span class=p>(</span><span class=mi>2</span><span class=p>)</span>
-<span class=mi>13</span>
-<span class=mi>14</span>                  <span class=c1>// goroutine 1: update string s
-</span><span class=c1></span><span class=mi>15</span>                  <span class=k>go</span> <span class=kd>func</span><span class=p>()</span> <span class=p>{</span>
-<span class=mi>16</span>                          <span class=k>defer</span> <span class=nx>wg</span><span class=p>.</span><span class=nf>Done</span><span class=p>()</span>
-<span class=mi>17</span>                          <span class=nx>s</span> <span class=p>=</span> <span class=s>&#34;panic?&#34;</span>
-<span class=mi>18</span>                  <span class=p>}()</span>
-<span class=mi>19</span>
-<span class=mi>20</span>                  <span class=c1>// goroutine 2: read string s
-</span><span class=c1></span><span class=mi>21</span>                  <span class=k>go</span> <span class=kd>func</span><span class=p>()</span> <span class=p>{</span>
-<span class=mi>22</span>                          <span class=k>defer</span> <span class=nx>wg</span><span class=p>.</span><span class=nf>Done</span><span class=p>()</span>
-<span class=mi>23</span>                          <span class=nx>r</span> <span class=p>=</span> <span class=nb>append</span><span class=p>(</span><span class=nx>r</span><span class=p>,</span> <span class=nx>s</span><span class=o>...</span><span class=p>)</span>
-<span class=mi>24</span>                  <span class=p>}()</span>
-<span class=mi>25</span>
-<span class=mi>26</span>                  <span class=nx>wg</span><span class=p>.</span><span class=nf>Wait</span><span class=p>()</span>
-<span class=mi>27</span>          <span class=p>}</span>
-<span class=mi>28</span>  <span class=p>}</span>
+<span class="kd">func</span> <span class="nf">main</span><span class="p">()</span> <span class="p">{</span>
+        <span class="k">for</span> <span class="p">{</span>
+                <span class="nx">c</span> <span class="o">:=</span> <span class="nb">make</span><span class="p">(</span><span class="kd">chan</span> <span class="kt">bool</span><span class="p">)</span>
+                <span class="nx">m</span> <span class="o">:=</span> <span class="nb">make</span><span class="p">(</span><span class="kd">map</span><span class="p">[</span><span class="kt">string</span><span class="p">]</span><span class="kt">string</span><span class="p">)</span>
+                <span class="k">go</span> <span class="kd">func</span><span class="p">()</span> <span class="p">{</span>
+                        <span class="nx">m</span><span class="p">[</span><span class="s">&#34;1&#34;</span><span class="p">]</span> <span class="p">=</span> <span class="s">&#34;a&#34;</span> <span class="c1">// First conflicting access.
+</span><span class="c1"></span>                        <span class="nx">c</span> <span class="o">&lt;-</span> <span class="kc">true</span>
+                <span class="p">}()</span>
+                <span class="nx">m</span><span class="p">[</span><span class="s">&#34;2&#34;</span><span class="p">]</span> <span class="p">=</span> <span class="s">&#34;b&#34;</span> <span class="c1">// Second conflicting access.
+</span><span class="c1"></span>                <span class="o">&lt;-</span><span class="nx">c</span>
+        <span class="p">}</span>
+<span class="p">}</span>
+</code></pre></div><p>那么下面的代码也会 panic 吗？</p>
+<div class="highlight"><pre class="chroma"><code class="language-go" data-lang="go"><span class="c1">// example 2
+</span><span class="c1">//
+</span><span class="c1"></span><span class="mi">1</span>  <span class="kn">package</span> <span class="nx">main</span>
+<span class="mi">2</span>
+<span class="mi">3</span>  <span class="kn">import</span> <span class="s">&#34;sync&#34;</span>
+<span class="mi">4</span>
+<span class="mi">5</span>  <span class="kd">func</span> <span class="nf">main</span><span class="p">()</span> <span class="p">{</span>
+<span class="mi">6</span>          <span class="kd">var</span> <span class="nx">wg</span> <span class="nx">sync</span><span class="p">.</span><span class="nx">WaitGroup</span>
+<span class="mi">7</span>
+<span class="mi">8</span>          <span class="k">for</span> <span class="p">{</span>
+<span class="mi">9</span>                  <span class="kd">var</span> <span class="nx">s</span> <span class="kt">string</span>
+<span class="mi">10</span>                  <span class="kd">var</span> <span class="nx">r</span> <span class="p">[]</span><span class="kt">byte</span>
+<span class="mi">11</span>
+<span class="mi">12</span>                  <span class="nx">wg</span><span class="p">.</span><span class="nf">Add</span><span class="p">(</span><span class="mi">2</span><span class="p">)</span>
+<span class="mi">13</span>
+<span class="mi">14</span>                  <span class="c1">// goroutine 1: update string s
+</span><span class="c1"></span><span class="mi">15</span>                  <span class="k">go</span> <span class="kd">func</span><span class="p">()</span> <span class="p">{</span>
+<span class="mi">16</span>                          <span class="k">defer</span> <span class="nx">wg</span><span class="p">.</span><span class="nf">Done</span><span class="p">()</span>
+<span class="mi">17</span>                          <span class="nx">s</span> <span class="p">=</span> <span class="s">&#34;panic?&#34;</span>
+<span class="mi">18</span>                  <span class="p">}()</span>
+<span class="mi">19</span>
+<span class="mi">20</span>                  <span class="c1">// goroutine 2: read string s
+</span><span class="c1"></span><span class="mi">21</span>                  <span class="k">go</span> <span class="kd">func</span><span class="p">()</span> <span class="p">{</span>
+<span class="mi">22</span>                          <span class="k">defer</span> <span class="nx">wg</span><span class="p">.</span><span class="nf">Done</span><span class="p">()</span>
+<span class="mi">23</span>                          <span class="nx">r</span> <span class="p">=</span> <span class="nb">append</span><span class="p">(</span><span class="nx">r</span><span class="p">,</span> <span class="nx">s</span><span class="o">...</span><span class="p">)</span>
+<span class="mi">24</span>                  <span class="p">}()</span>
+<span class="mi">25</span>
+<span class="mi">26</span>                  <span class="nx">wg</span><span class="p">.</span><span class="nf">Wait</span><span class="p">()</span>
+<span class="mi">27</span>          <span class="p">}</span>
+<span class="mi">28</span>  <span class="p">}</span>
 </code></pre></div><p>答案稍后揭晓，现在先看下 Go Runtime 下是如何描述 string 数据: 一个 string 有两个
-字段，str 用来存储长度为 len 的字符串。那么 string 的赋值会是原子操作吗？</p><div class=highlight><pre class=chroma><code class=language-go data-lang=go><span class=c1>// https://github.com/golang/go/tree/release-branch.go1.13/src/runtime/string.go
-</span><span class=c1></span>
-<span class=kd>type</span> <span class=nx>stringStruct</span> <span class=kd>struct</span> <span class=p>{</span>
-        <span class=nx>str</span> <span class=nx>unsafe</span><span class=p>.</span><span class=nx>Pointer</span>
-        <span class=nx>len</span> <span class=kt>int</span>
-<span class=p>}</span>
+字段，str 用来存储长度为 len 的字符串。那么 string 的赋值会是原子操作吗？</p>
+<div class="highlight"><pre class="chroma"><code class="language-go" data-lang="go"><span class="c1">// https://github.com/golang/go/tree/release-branch.go1.13/src/runtime/string.go
+</span><span class="c1"></span>
+<span class="kd">type</span> <span class="nx">stringStruct</span> <span class="kd">struct</span> <span class="p">{</span>
+        <span class="nx">str</span> <span class="nx">unsafe</span><span class="p">.</span><span class="nx">Pointer</span>
+        <span class="nx">len</span> <span class="kt">int</span>
+<span class="p">}</span>
 
-<span class=c1>// 为了防止编译器优化带来影响，需要在下面的代码里引入 print 和额外的 goroutine，
-</span><span class=c1>// 保证在汇编结果里就可以看到实际的字符串赋值语句了。
-</span><span class=c1>//
-</span><span class=c1>// cat -n main.go
-</span><span class=c1></span><span class=mi>1</span>  <span class=kn>package</span> <span class=nx>main</span>
-<span class=mi>2</span>
-<span class=mi>3</span>  <span class=kd>func</span> <span class=nf>main</span><span class=p>()</span> <span class=p>{</span>
-<span class=mi>4</span>          <span class=kd>var</span> <span class=nx>s</span> <span class=kt>string</span>
-<span class=mi>5</span>          <span class=k>go</span> <span class=kd>func</span><span class=p>()</span> <span class=p>{</span>
-<span class=mi>6</span>                  <span class=nx>s</span> <span class=p>=</span> <span class=s>&#34;I am string&#34;</span>
-<span class=mi>7</span>          <span class=p>}()</span>
-<span class=mi>8</span>          <span class=nb>print</span><span class=p>(</span><span class=nx>s</span><span class=p>)</span>
-<span class=mi>9</span>  <span class=p>}</span>
+<span class="c1">// 为了防止编译器优化带来影响，需要在下面的代码里引入 print 和额外的 goroutine，
+</span><span class="c1">// 保证在汇编结果里就可以看到实际的字符串赋值语句了。
+</span><span class="c1">//
+</span><span class="c1">// cat -n main.go
+</span><span class="c1"></span><span class="mi">1</span>  <span class="kn">package</span> <span class="nx">main</span>
+<span class="mi">2</span>
+<span class="mi">3</span>  <span class="kd">func</span> <span class="nf">main</span><span class="p">()</span> <span class="p">{</span>
+<span class="mi">4</span>          <span class="kd">var</span> <span class="nx">s</span> <span class="kt">string</span>
+<span class="mi">5</span>          <span class="k">go</span> <span class="kd">func</span><span class="p">()</span> <span class="p">{</span>
+<span class="mi">6</span>                  <span class="nx">s</span> <span class="p">=</span> <span class="s">&#34;I am string&#34;</span>
+<span class="mi">7</span>          <span class="p">}()</span>
+<span class="mi">8</span>          <span class="nb">print</span><span class="p">(</span><span class="nx">s</span><span class="p">)</span>
+<span class="mi">9</span>  <span class="p">}</span>
 </code></pre></div><p>为了查看具体 string 赋值代码，这里需要使用 <code>go tool compile -S ./main.go</code> 来获
-取汇编结果。在下面的输出结果中，<code>s = "I am string"</code> 赋值语句会被拆成两部分: 先
-更新字符串的长度 len 字段, 再更新具体的字符串内容到 str 字段。</p><div class=highlight><pre class=chroma><code class=language-fallback data-lang=fallback>&#34;&#34;.main.func1 STEXT size=89 args=0x8 locals=0x8
-	0x0000 00000 (./main.go:5)      TEXT    &#34;&#34;.main.func1(SB), ABIInternal, $8-8
+取汇编结果。在下面的输出结果中，<code>s = &quot;I am string&quot;</code> 赋值语句会被拆成两部分: 先
+更新字符串的长度 len 字段, 再更新具体的字符串内容到 str 字段。</p>
+<pre><code class="language-assemble" data-lang="assemble">&quot;&quot;.main.func1 STEXT size=89 args=0x8 locals=0x8
+	0x0000 00000 (./main.go:5)      TEXT    &quot;&quot;.main.func1(SB), ABIInternal, $8-8
 	0x0000 00000 (./main.go:5)      MOVQ    (TLS), CX
 	0x0009 00009 (./main.go:5)      CMPQ    SP, 16(CX)
 	0x000d 00013 (./main.go:5)      JLS     82
@@ -85,7 +145,7 @@
 	0x001b 00027 (./main.go:6)      PCDATA  $0, $1
 	0x001b 00027 (./main.go:6)      PCDATA  $1, $1
 
-	  0x001b 00027 (./main.go:6)      MOVQ    &#34;&#34;.&amp;s+16(SP), DI
+	  0x001b 00027 (./main.go:6)      MOVQ    &quot;&quot;.&amp;s+16(SP), DI
 先更新长度  0x0020 00032 (./main.go:6)      MOVQ    $11, 8(DI)
 
 	0x0028 00040 (./main.go:6)      PCDATA  $0, $-2
@@ -93,13 +153,13 @@
 	0x0028 00040 (./main.go:6)      CMPL    runtime.writeBarrier(SB), $0
 	0x002f 00047 (./main.go:6)      JNE     68
 
-再赋值内容  0x0031 00049 (./main.go:6)      LEAQ    go.string.&#34;I am string&#34;(SB), AX
+再赋值内容  0x0031 00049 (./main.go:6)      LEAQ    go.string.&quot;I am string&quot;(SB), AX
 	  0x0038 00056 (./main.go:6)      MOVQ    AX, (DI)
 
 	0x003b 00059 (./main.go:7)      MOVQ    (SP), BP
 	0x003f 00063 (./main.go:7)      ADDQ    $8, SP
 	0x0043 00067 (./main.go:7)      RET
-	0x0044 00068 (./main.go:6)      LEAQ    go.string.&#34;I am string&#34;(SB), AX
+	0x0044 00068 (./main.go:6)      LEAQ    go.string.&quot;I am string&quot;(SB), AX
 	0x004b 00075 (./main.go:6)      CALL    runtime.gcWriteBarrier(SB)
 	0x0050 00080 (./main.go:6)      JMP     59
 	0x0052 00082 (./main.go:6)      NOP
@@ -107,10 +167,14 @@
 	0x0052 00082 (./main.go:5)      PCDATA  $0, $-1
 	0x0052 00082 (./main.go:5)      CALL    runtime.morestack_noctxt(SB)
 	0x0057 00087 (./main.go:5)      JMP     0
-</code></pre></div><blockquote><p>NOTE: <code>runtime.xxxBarrier</code> 是 Go 编译器为垃圾回收生成的代码，可以忽略。</p></blockquote><p>回到一开始的问题 example 2 代码片段，<code>r = append(r, s...)</code> 采用 <a href=https://github.com/golang/go/blob/release-branch.go1.13/src/runtime/stubs.go#L88>memmove</a>
-方法从字符串 s 拷贝 len(s) 个字节到 r 里。由于 <code>s = "panic?"</code> 赋值和 <code>append</code> 读
+</code></pre><blockquote>
+<p>NOTE: <code>runtime.xxxBarrier</code> 是 Go 编译器为垃圾回收生成的代码，可以忽略。</p>
+</blockquote>
+<p>回到一开始的问题 example 2 代码片段，<code>r = append(r, s...)</code> 采用 <a href="https://github.com/golang/go/blob/release-branch.go1.13/src/runtime/stubs.go#L88">memmove</a>
+方法从字符串 s 拷贝 len(s) 个字节到 r 里。由于 <code>s = &quot;panic?&quot;</code> 赋值和 <code>append</code> 读
 操作是同时进行：假设 s.len 已经被更新成 6 ，但是 s.str 还是 nil 状态，这个时候
-正好执行了 append 的操作，直接读取空指针必定会 panic。</p><div class=highlight><pre class=chroma><code class=language-plain data-lang=plain>// 其中一种可能的执行顺序
+正好执行了 append 的操作，直接读取空指针必定会 panic。</p>
+<div class="highlight"><pre class="chroma"><code class="language-plain" data-lang="plain">// 其中一种可能的执行顺序
 
 goruntine 1: set s.len = len(&#34;panic?&#34;) # 6 字节
 goruntine 2: r = append(r, s...)       # 将从 s.str 中拷贝 6 字节，但 s.str = nil
@@ -135,13 +199,38 @@ goroutine 1: set s.str = &#34;panic?&#34;
 (...)
 </code></pre></div><p>除了 append 这种场景以外，字符串的比较同样需要 len 和 str 一致。如果在执行读操作
 时，str 实际存储的数据长度比 len 短，程序就会 panic。所以避免 data race 最好方式
-就是采用合适的同步机制，这来自 Go 团队给出的最佳实践：</p><blockquote><p>Programs that modify data being simultaneously accessed by multiple goroutines must serialize such access.</p><p>from <a href=https://golang.org/ref/mem>https://golang.org/ref/mem</a> Advice section</p></blockquote></div><footer class=post-footer><ul class=post-tags></ul><nav class=paginav><a class=prev href=https://fuweid.com/post/2020-go-sync-mutex-insight/><span class=title>« Prev</span><br><span>go sync.Mutex 源码阅读</span></a>
-<a class=next href=https://fuweid.com/post/2020-digital-book-from-safari/><span class=title>Next »</span><br><span>在线看 O'Reilly 动物新书指南</span></a></nav></footer></article></main><footer class=footer><span>&copy; 2024 <a href=https://fuweid.com/>fuweid</a></span>
-<span>Powered by
-<a href=https://gohugo.io/ rel="noopener noreferrer" target=_blank>Hugo</a> &
-        <a href=https://github.com/adityatelange/hugo-PaperMod/ rel=noopener target=_blank>PaperMod</a></span></footer><a href=#top aria-label="go to top" title="Go to Top (Alt + G)" class=top-link id=top-link accesskey=g><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 12 6" fill="currentcolor"><path d="M12 6H0l6-6z"/></svg></a><script>let menu=document.getElementById('menu')
-if(menu){menu.scrollLeft=localStorage.getItem("menu-scroll-position");menu.onscroll=function(){localStorage.setItem("menu-scroll-position",menu.scrollLeft);}}
-document.querySelectorAll('a[href^="#"]').forEach(anchor=>{anchor.addEventListener("click",function(e){e.preventDefault();var id=this.getAttribute("href").substr(1);if(!window.matchMedia('(prefers-reduced-motion: reduce)').matches){document.querySelector(`[id='${decodeURIComponent(id)}']`).scrollIntoView({behavior:"smooth"});}else{document.querySelector(`[id='${decodeURIComponent(id)}']`).scrollIntoView();}
-if(id==="top"){history.replaceState(null,null," ");}else{history.pushState(null,null,`#${id}`);}});});</script><script>var mybutton=document.getElementById("top-link");window.onscroll=function(){if(document.body.scrollTop>800||document.documentElement.scrollTop>800){mybutton.style.visibility="visible";mybutton.style.opacity="1";}else{mybutton.style.visibility="hidden";mybutton.style.opacity="0";}};</script><script>document.getElementById("theme-toggle").addEventListener("click",()=>{if(document.body.className.includes("dark")){document.body.classList.remove('dark');localStorage.setItem("pref-theme",'light');}else{document.body.classList.add('dark');localStorage.setItem("pref-theme",'dark');}})</script><script>document.querySelectorAll('pre > code').forEach((codeblock)=>{const container=codeblock.parentNode.parentNode;const copybutton=document.createElement('button');copybutton.classList.add('copy-code');copybutton.innerHTML='copy';function copyingDone(){copybutton.innerHTML='copied!';setTimeout(()=>{copybutton.innerHTML='copy';},2000);}
-copybutton.addEventListener('click',(cb)=>{if('clipboard'in navigator){navigator.clipboard.writeText(codeblock.textContent);copyingDone();return;}
-const range=document.createRange();range.selectNodeContents(codeblock);const selection=window.getSelection();selection.removeAllRanges();selection.addRange(range);try{document.execCommand('copy');copyingDone();}catch(e){};selection.removeRange(range);});if(container.classList.contains("highlight")){container.appendChild(copybutton);}else if(container.parentNode.firstChild==container){}else if(codeblock.parentNode.parentNode.parentNode.parentNode.parentNode.nodeName=="TABLE"){codeblock.parentNode.parentNode.parentNode.parentNode.parentNode.appendChild(copybutton);}else{codeblock.parentNode.appendChild(copybutton);}});</script></body></html>
+就是采用合适的同步机制，这来自 Go 团队给出的最佳实践：</p>
+<blockquote>
+<p>Programs that modify data being simultaneously accessed by multiple goroutines must serialize such access.</p>
+<p>from <a href="https://golang.org/ref/mem">https://golang.org/ref/mem</a> Advice section</p>
+</blockquote>
+
+            </article>
+        </div>
+
+        <footer>
+    &copy; 2024 Fu Wei
+</footer>
+
+<script>
+    function doPrettify(){
+        pres=document.getElementsByTagName('pre');
+        for (i=0; i < pres.length; i++) {
+            pres[i].className+=" prettyprint";
+        }
+        prettyPrint();
+    }
+</script>
+
+
+<script async src="https://www.googletagmanager.com/gtag/js?id=G-1C7VLVHN52"></script>
+<script>
+  window.dataLayer = window.dataLayer || [];
+  function gtag(){dataLayer.push(arguments);}
+  gtag('js', new Date());
+
+  gtag('config', 'G-1C7VLVHN52');
+</script>
+
+    </body>
+</html>
