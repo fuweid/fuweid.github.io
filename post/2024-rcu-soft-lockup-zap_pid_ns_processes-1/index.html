@@ -1,0 +1,211 @@
+<!DOCTYPE html>
+<html>
+    <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+    <title>
+        
+            Fu, Wei: Non-Preemptible RCU soft lockup: zap_pid_ns_processes
+        
+    </title>
+
+    <meta property="og:title" content="Non-Preemptible RCU soft lockup: zap_pid_ns_processes"/>
+    <meta property="og:Section" content="website"/>
+    <meta property="og:url" content="https://fuweid.com/post/2024-rcu-soft-lockup-zap_pid_ns_processes-1/"/>
+    <meta property="og:image" content="https://fuweid.com/favicon.jpg"/>
+    <meta property="og:site_name" content="Fu, Wei"/>
+    <meta property="og:description" content="还没找到原因 :p"/>
+
+    <link rel="stylesheet" href="/css/fontawesome/all.css" />
+    <link rel="stylesheet" href="/css/main.css" /> 
+    <link rel="stylesheet" href="/css/normalize.css">
+    <link rel="stylesheet" href="/css/prettify.css">
+    <link rel="shortcut icon" href="https://fuweid.com/favicon.jpg">
+    <link rel="icon" href="https://fuweid.com/favicon.jpg">
+    <script type="text/javascript" src="/js/prettify.js"></script>
+</head>
+
+
+    <body onload="doPrettify()">
+        <header>
+    <nav>
+        <ul class="home">
+            <li>
+                <a href="https://fuweid.com/">Fu, Wei</a>
+            </li>
+        </ul>
+        <ul class="social">
+            <li>
+                <a class="fab fa-github" href="https://github.com/fuweid" target="_blank"></a>
+            </li>
+            <li>
+                <a class="fab fa-twitter" href="https://twitter.com/fuweid89" target="_blank"></a>
+            </li>
+            <li>
+                <a class="fas fa-rss" href="https://fuweid.com//index.xml" target="_blank"></a>
+            </li>
+        </ul>
+    </nav>
+</header>
+
+
+        <div class="container">
+            <article class="single">
+                <h1 class="title"> Non-Preemptible RCU soft lockup: zap_pid_ns_processes </h1>
+                <h4 class="time"> June 6, 2024 </h4>
+                <p>分享一个最近遇到的容器问题吧，虽然还不知道该怎么解决，但已经发信给内核社区寻求帮助了。</p>
+<p><a href="https://lore.kernel.org/linux-kernel/1386cd49-36d0-4a5c-85e9-bc42056a5a38@linux.microsoft.com/T/#u">[RCU] zombie task hung in synchronize_rcu_expedited</a></p>
+<p>这是一个关于 <code>zap_pid_ns_processes.kernel_wait4</code> 死循环的问题，因为没有开启内核的 <strong>抢占模式</strong>，
+似乎处于 <code>zap_pid_ns_processes.kernel_wait4</code> 调用栈的线程没法进行上下文切换，导致 <code>synchronize_rcu_expedited</code> 卡死，
+容器无法正常释放 mount_namespace。目前我可以在 <code>v5.15/v6.1/v6.5/v6.9/v6.10-rc2</code> 内核版本上复现该问题，
+而且在 v5.15 内核上尤其容易复现。</p>
+<blockquote>
+<p>注: 编译条件可以查看文章的最后。</p>
+</blockquote>
+<h2 id="non-preemptible-rcu-synchronize_rcu_expedited">Non-Preemptible RCU synchronize_rcu_expedited</h2>
+<p>RCU 是一个极其复杂的话题，本节关于 RCU 的描述会存在不准确或者不正确的可能性。
+本人仅在复现 soft lockup 问题上表达自己对不可抢占 RCU 的一些理解，对于更官方或者更准确的表达，应该查阅 <a href="https://docs.kernel.org/RCU/index.html">RCU 的官方文档</a>。</p>
+<p>Read-Copy-Update 是内核里对并发读比较友好的同步机制。与传统的互斥锁不同，RCU 利用 CPU 上下文切换来反馈进程是否离开了临界区。</p>
+<div class="highlight"><pre class="chroma"><code class="language-c" data-lang="c"><span class="n">rcu_read_lock</span><span class="p">()</span>
+<span class="c1">// RCU read-side critical section
+</span><span class="c1"></span><span class="n">rcu_read_unlock</span><span class="p">()</span>
+</code></pre></div><p>RCU 临界区内不可自行调用 <code>schedule</code> 来进行 CPU 线程的上下文切换。
+因此非抢占模式下的 CPU 线程发生上下文切换时，比如内核态返回用户态或者执行其他进程时，那么当前 CPU 一定离开了 RCU 临界区。
+内核没有内存垃圾回收机制，因此当受 RCU 临界区保护的数据需要更新时，更新者要负责回收正在被 RCU 临界区访问的老数据。
+因此 RCU 的更新操作分两个阶段：<strong>删除</strong> 和 <strong>回收</strong>。</p>
+<div class="highlight"><pre class="chroma"><code class="language-c" data-lang="c"><span class="c1">// https://lwn.net/Articles/262464/#Publish-Subscribe%20Mechanism
+</span><span class="c1"></span>
+<span class="n">q</span> <span class="o">=</span> <span class="n">kmalloc</span><span class="p">(</span><span class="k">sizeof</span><span class="p">(</span><span class="o">*</span><span class="n">p</span><span class="p">),</span> <span class="n">GFP_KERNEL</span><span class="p">);</span>
+<span class="o">*</span><span class="n">q</span> <span class="o">=</span> <span class="o">*</span><span class="n">p</span><span class="p">;</span>
+<span class="n">q</span><span class="o">-&gt;</span><span class="n">b</span> <span class="o">=</span> <span class="mi">2</span><span class="p">;</span>
+<span class="n">q</span><span class="o">-&gt;</span><span class="n">c</span> <span class="o">=</span> <span class="mi">3</span><span class="p">;</span>
+<span class="c1">// Removal
+</span><span class="c1"></span><span class="n">list_replace_rcu</span><span class="p">(</span><span class="o">&amp;</span><span class="n">p</span><span class="o">-&gt;</span><span class="n">list</span><span class="p">,</span> <span class="o">&amp;</span><span class="n">q</span><span class="o">-&gt;</span><span class="n">list</span><span class="p">);</span>
+<span class="n">synchronize_rcu</span><span class="p">();</span>
+<span class="c1">// Reclamation
+</span><span class="c1"></span><span class="n">kfree</span><span class="p">(</span><span class="n">p</span><span class="p">);</span>
+</code></pre></div><p>删除操作本质上是赋值，表示当前的数据已指向新的内存地址。
+但<strong>更新前的数据内存</strong>可能正在被其他 CPU 线程访问，更新者无法直接释放这块内存，它需要等待所有 CPU 线程都离开了临界区。</p>
+<p>在具体实现细节里，每一个 CPU 线程都有 <code>Quiescent State</code> 标志。
+当 CPU 线程正在访问 RCU 临界区时，我们称之为 <strong>活跃态</strong>；当 CPU 离开临界区后并发生上下文切换时，那么我们称之为 <strong>静止态</strong>。
+<strong>RCU 数据更新者</strong> 在更新完数据后，它需要调用 <code>synchronize_rcu</code> 函数等待所有 CPU 线程上报静止态，这段等待时长称之为 <code>Grace Period</code> <strong>宽限期</strong>。
+如下图所示，CPU 1 和 CPU 2 分别离开 Reader 1-1 和 Reader 2-1 临界区后上报静止态；
+而 CPU 3 启发宽限期时，CPU 0 已经属于空闲状态，因此后续 Reader 0-2 临界区访问的是新的数据内存，不存在释放内存的风险。
+因此宽限期在 CPU 2 上报静止态后结束。 宽限期后并没有代码会继续访问老的数据内存，CPU 3 可以放心释放这段内存空间。</p>
+<p><img src="/img/2024-rcu-soft-lockup-zap_pid_ns_processes/Grace-Period-v1.svg" alt="grace-period"></p>
+<p><code>synchronize_rcu</code> 主动等待其他 CPU 线程上报静止态，可能存在长延迟的情况。
+内核提供了 <code>synchronize_rcu_expedited</code> 函数来加速其他 CPU 线程上报静止态的效率。
+<code>synchronize_rcu_expedited</code> 会主动给 <code>non-idle no-hz</code> CPU 线程发送 IPI 中断。
+以 v5.15 内核代码为例，<a href="https://elixir.bootlin.com/linux/v5.15.160/source/kernel/rcu/tree_exp.h#L821">synchronize_rcu_expedited</a> 会启动 kernel worker 去运行 <a href="https://elixir.bootlin.com/linux/v5.15.160/source/kernel/rcu/tree_exp.h#L630">wait_rcu_exp_gp</a>, 然后等待所有的 CPU 线程上报静止态。
+<code>wait_rcu_exp_gp</code> 会调用 <code>smp_call_function_single</code> 给 CPU 线程发送 IPI 中断，随后对应的 CPU 线程会进入到 <code>rcu_exp_handler</code>。
+在 <a href="https://elixir.bootlin.com/linux/v5.15.160/source/kernel/rcu/tree_exp.h#L742">rcu_exp_handler</a> 的逻辑里，如果发现 CPU 线程原本属于空闲状态，那么它将立刻上报静止态。
+如果不是，那么它将当前进程标记成可抢占，一旦该进程满足被抢占条件后，该 CPU 线程就会出现上下文切换并上报静止态。</p>
+<div class="highlight"><pre class="chroma"><code class="language-c" data-lang="c"><span class="c1">// v5.15.160
+</span><span class="c1"></span>
+<span class="cm">/* Request an expedited quiescent state. */</span>
+<span class="k">static</span> <span class="kt">void</span> <span class="nf">rcu_exp_need_qs</span><span class="p">(</span><span class="kt">void</span><span class="p">)</span>
+<span class="p">{</span>
+	<span class="n">__this_cpu_write</span><span class="p">(</span><span class="n">rcu_data</span><span class="p">.</span><span class="n">cpu_no_qs</span><span class="p">.</span><span class="n">b</span><span class="p">.</span><span class="n">exp</span><span class="p">,</span> <span class="nb">true</span><span class="p">);</span>
+	<span class="cm">/* Store .exp before .rcu_urgent_qs. */</span>
+	<span class="n">smp_store_release</span><span class="p">(</span><span class="n">this_cpu_ptr</span><span class="p">(</span><span class="o">&amp;</span><span class="n">rcu_data</span><span class="p">.</span><span class="n">rcu_urgent_qs</span><span class="p">),</span> <span class="nb">true</span><span class="p">);</span>
+	<span class="n">set_tsk_need_resched</span><span class="p">(</span><span class="n">current</span><span class="p">);</span>
+	<span class="n">set_preempt_need_resched</span><span class="p">();</span>
+<span class="p">}</span>
+
+<span class="cm">/* Invoked on each online non-idle CPU for expedited quiescent state. */</span>
+<span class="k">static</span> <span class="kt">void</span> <span class="nf">rcu_exp_handler</span><span class="p">(</span><span class="kt">void</span> <span class="o">*</span><span class="n">unused</span><span class="p">)</span>
+<span class="p">{</span>
+	<span class="k">struct</span> <span class="n">rcu_data</span> <span class="o">*</span><span class="n">rdp</span> <span class="o">=</span> <span class="n">this_cpu_ptr</span><span class="p">(</span><span class="o">&amp;</span><span class="n">rcu_data</span><span class="p">);</span>
+	<span class="k">struct</span> <span class="n">rcu_node</span> <span class="o">*</span><span class="n">rnp</span> <span class="o">=</span> <span class="n">rdp</span><span class="o">-&gt;</span><span class="n">mynode</span><span class="p">;</span>
+
+	<span class="k">if</span> <span class="p">(</span><span class="o">!</span><span class="p">(</span><span class="n">READ_ONCE</span><span class="p">(</span><span class="n">rnp</span><span class="o">-&gt;</span><span class="n">expmask</span><span class="p">)</span> <span class="o">&amp;</span> <span class="n">rdp</span><span class="o">-&gt;</span><span class="n">grpmask</span><span class="p">)</span> <span class="o">||</span>
+	    <span class="n">__this_cpu_read</span><span class="p">(</span><span class="n">rcu_data</span><span class="p">.</span><span class="n">cpu_no_qs</span><span class="p">.</span><span class="n">b</span><span class="p">.</span><span class="n">exp</span><span class="p">))</span>
+		<span class="k">return</span><span class="p">;</span>
+	<span class="k">if</span> <span class="p">(</span><span class="n">rcu_is_cpu_rrupt_from_idle</span><span class="p">())</span> <span class="p">{</span>
+		<span class="n">rcu_report_exp_rdp</span><span class="p">(</span><span class="n">this_cpu_ptr</span><span class="p">(</span><span class="o">&amp;</span><span class="n">rcu_data</span><span class="p">));</span>
+		<span class="k">return</span><span class="p">;</span>
+	<span class="p">}</span>
+	<span class="n">rcu_exp_need_qs</span><span class="p">();</span>
+<span class="p">}</span>
+</code></pre></div><p>但如果目标 CPU 线程进入了内核态，而且内核关闭了可抢占的功能，那么 <code>synchronize_rcu_expedited</code> 函数只能等待目标 CPU 线程自己切换上下文了。</p>
+<h2 id="put_mnt_nssynchronize_rcu_expedited-stuck">put_mnt_ns.synchronize_rcu_expedited stuck</h2>
+<p>现在我们使用的容器一般都会配置 <a href="https://www.man7.org/linux/man-pages/man7/pid_namespaces.7.html">pid_namespace(7)</a> 和 <a href="https://www.man7.org/linux/man-pages/man7/mount_namespaces.7.html">mount_namespace(7)</a> 分别做进程视图隔离以及挂载点隔离。
+在新的 <code>pid_namespace PA</code> 里，一旦一号进程退出，一号进程会在 <a href="https://elixir.bootlin.com/linux/v5.15.160/source/kernel/exit.c#L708">do_exit.exit_notify</a> 里调用 <a href="https://elixir.bootlin.com/linux/v5.15.160/source/kernel/pid_namespace.c#L166">zap_pid_ns_processes</a> 给 <code>PA</code> 下的所有进程发送 SIGKILL 信号，
+并主动回收僵尸进程。假设只有这个 <code>PA</code> 下的进程使用了 <code>mount_namespace MA</code>，那么当最后一个线程进入到 <a href="https://elixir.bootlin.com/linux/v5.15.160/source/kernel/exit.c#L871">do_exit.exit_task_namespaces</a> 阶段时，
+它回收 <code>mount_namespace MA</code> 资源。<a href="https://elixir.bootlin.com/linux/v5.15.160/source/fs/namespace.c#L1935">put_mnt_ns.drop_collected_mounts</a> 释放完资源后，它会调用 <code>synchronize_rcu_expedited</code>。</p>
+<p>现在遇到的问题是，没有开启抢占模式的情况下，因为某种原因导致某个 CPU 线程卡在 <code>zap_pid_ns_processes.kernel_wait4</code> 阶段。
+那么这将导致调用 <code>synchronize_rcu_expedited</code> 的线程也将进入 <code>Disk Sleep</code> 状态。因为内核并不允许并发调用 <code>synchronize_rcu_expedited</code>，其他容器在退出时，那么必定会有线程进入到 <a href="https://elixir.bootlin.com/linux/v5.15.160/source/kernel/rcu/tree_exp.h#L280">exp_funnel_lock</a> 等锁状态。</p>
+<p>为了方便复现这个卡顿问题，我们使用 GO 程序来 re-exec 自身来构造出以下进程树。</p>
+<pre><code>unshare(CLONE_NEWPID|CLONE_NEWNS)     [Start]
+		 |
+		 |
+		 v
+rcudeadlock task &amp;&amp; rcudeadlock start [Entrypoint]
+		 |
+		 |
+		 v
+rcudeadlock start                     [PID 1 and exit]
+   |___ rcudeadlock zombie
+         |__ bash -c &quot;while true; echo zombie; sleep 1; done&quot;
+</code></pre><p>以下使用 Ubuntu v5.15.0-1064-azure 内核复现的日志，可以看到 <code>rcudeadlock start (pid 2928)</code> 进入 <code>kernel_wait4</code> 状态，并长时间霸占 <code>CPU #2</code> 线程上；而它的孩子进程 <code>sleep (pid 3141)</code> 等待在了 <code>synchronize_rcu_expedited</code>。如果后续还有新的进程需要回收 mount_namespace，那么这些进程都将卡在 <code>synchronize_rcu_expedited</code>。</p>
+<p><img src="/img/2024-rcu-soft-lockup-zap_pid_ns_processes/deadlock-dmesg-log.png" alt="deadlock-dmesg-log"></p>
+<p>目前还不知道具体原因，但比较有意思的是，一旦在 <code>rcudeadlock</code> 进程中引入 <a href="https://man7.org/linux/man-pages/man7/io_uring.7.html">io_uring(7)</a> 空闲线程后，这个问题就特别容易复现。</p>
+<h2 id="how-to-build-kernel-to-reproduce-this-issue">How to build kernel to reproduce this issue?</h2>
+<p>编译内核需要关闭 <code>CONFIG_PREEMPT</code> 以及 <code>CONFIG_PREEMPT_RCU</code>，大致如下图所示。</p>
+<div class="highlight"><pre class="chroma"><code class="language-bash" data-lang="bash">$ cat /boot/config-5.15.0-1064-azure <span class="p">|</span> grep _RCU
+<span class="nv">CONFIG_TREE_RCU</span><span class="o">=</span>y
+<span class="c1"># CONFIG_RCU_EXPERT is not set</span>
+<span class="nv">CONFIG_TASKS_RCU_GENERIC</span><span class="o">=</span>y
+<span class="nv">CONFIG_TASKS_RUDE_RCU</span><span class="o">=</span>y
+<span class="nv">CONFIG_TASKS_TRACE_RCU</span><span class="o">=</span>y
+<span class="nv">CONFIG_RCU_STALL_COMMON</span><span class="o">=</span>y
+<span class="nv">CONFIG_RCU_NEED_SEGCBLIST</span><span class="o">=</span>y
+<span class="nv">CONFIG_RCU_NOCB_CPU</span><span class="o">=</span>y
+<span class="nv">CONFIG_MMU_GATHER_RCU_TABLE_FREE</span><span class="o">=</span>y
+<span class="c1"># CONFIG_RCU_SCALE_TEST is not set</span>
+<span class="c1"># CONFIG_RCU_TORTURE_TEST is not set</span>
+<span class="c1"># CONFIG_RCU_REF_SCALE_TEST is not set</span>
+<span class="nv">CONFIG_RCU_CPU_STALL_TIMEOUT</span><span class="o">=</span><span class="m">60</span>
+<span class="c1"># CONFIG_RCU_TRACE is not set</span>
+<span class="c1"># CONFIG_RCU_EQS_DEBUG is not set</span>
+
+$ cat /boot/config-5.15.0-1064-azure <span class="p">|</span> grep _PREEMPT
+<span class="c1"># CONFIG_PREEMPT_NONE is not set</span>
+<span class="nv">CONFIG_PREEMPT_VOLUNTARY</span><span class="o">=</span>y
+<span class="c1"># CONFIG_PREEMPT is not set</span>
+<span class="nv">CONFIG_HAVE_PREEMPT_DYNAMIC</span><span class="o">=</span>y
+<span class="nv">CONFIG_PREEMPT_NOTIFIERS</span><span class="o">=</span>y
+<span class="nv">CONFIG_DRM_I915_PREEMPT_TIMEOUT</span><span class="o">=</span><span class="m">640</span>
+<span class="c1"># CONFIG_PREEMPTIRQ_DELAY_TEST is not set</span>
+</code></pre></div><p>目前在 8 vcores 环境下，运行 <a href="https://github.com/rlmenge/rcu-soft-lock-issue-repro/blob/main/rcudeadlock.go">rcudeadlock</a> 容易复现。在 v5.15 内核环境下，大概就几分钟的时间就可以复现。而在 <strong>&gt;= v6.5</strong> 环境下复现时间不固定，有时候需要花几个小时, v6.10-rc2 内核依旧可以复现。</p>
+
+            </article>
+        </div>
+
+        <footer>
+    &copy; 2024 Fu Wei
+</footer>
+
+<script>
+    function doPrettify(){
+        pres=document.getElementsByTagName('pre');
+        for (i=0; i < pres.length; i++) {
+            pres[i].className+=" prettyprint";
+        }
+        prettyPrint();
+    }
+</script>
+
+
+<script async src="https://www.googletagmanager.com/gtag/js?id=G-1C7VLVHN52"></script>
+<script>
+  window.dataLayer = window.dataLayer || [];
+  function gtag(){dataLayer.push(arguments);}
+  gtag('js', new Date());
+
+  gtag('config', 'G-1C7VLVHN52');
+</script>
+
+    </body>
+</html>

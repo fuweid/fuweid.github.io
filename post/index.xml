@@ -5,7 +5,22 @@
     <link>https://fuweid.com/post/</link>
     <description>Recent content in Posts on Fu, Wei</description>
     <generator>Hugo -- gohugo.io</generator>
-    <lastBuildDate>Thu, 11 Apr 2024 20:48:45 +0800</lastBuildDate><atom:link href="https://fuweid.com/post/index.xml" rel="self" type="application/rss+xml" />
+    <lastBuildDate>Thu, 06 Jun 2024 07:47:45 +0800</lastBuildDate><atom:link href="https://fuweid.com/post/index.xml" rel="self" type="application/rss+xml" />
+    <item>
+      <title>Non-Preemptible RCU soft lockup: zap_pid_ns_processes</title>
+      <link>https://fuweid.com/post/2024-rcu-soft-lockup-zap_pid_ns_processes-1/</link>
+      <pubDate>Thu, 06 Jun 2024 07:47:45 +0800</pubDate>
+      
+      <guid>https://fuweid.com/post/2024-rcu-soft-lockup-zap_pid_ns_processes-1/</guid>
+      <description>分享一个最近遇到的容器问题吧，虽然还不知道该怎么解决，但已经发信给内核社区寻求帮助了。
+[RCU] zombie task hung in synchronize_rcu_expedited
+这是一个关于 zap_pid_ns_processes.kernel_wait4 死循环的问题，因为没有开启内核的 抢占模式， 似乎处于 zap_pid_ns_processes.kernel_wait4 调用栈的线程没法进行上下文切换，导致 synchronize_rcu_expedited 卡死， 容器无法正常释放 mount_namespace。目前我可以在 v5.15/v6.1/v6.5/v6.9/v6.10-rc2 内核版本上复现该问题， 而且在 v5.15 内核上尤其容易复现。
+ 注: 编译条件可以查看文章的最后。
+ Non-Preemptible RCU synchronize_rcu_expedited RCU 是一个极其复杂的话题，本节关于 RCU 的描述会存在不准确或者不正确的可能性。 本人仅在复现 soft lockup 问题上表达自己对不可抢占 RCU 的一些理解，对于更官方或者更准确的表达，应该查阅 RCU 的官方文档。
+Read-Copy-Update 是内核里对并发读比较友好的同步机制。与传统的互斥锁不同，RCU 利用 CPU 上下文切换来反馈进程是否离开了临界区。
+rcu_read_lock() // RCU read-side critical section rcu_read_unlock() RCU 临界区内不可自行调用 schedule 来进行 CPU 线程的上下文切换。 因此非抢占模式下的 CPU 线程发生上下文切换时，比如内核态返回用户态或者执行其他进程时，那么当前 CPU 一定离开了 RCU 临界区。 内核没有内存垃圾回收机制，因此当受 RCU 临界区保护的数据需要更新时，更新者要负责回收正在被 RCU 临界区访问的老数据。 因此 RCU 的更新操作分两个阶段：删除 和 回收。</description>
+    </item>
+    
     <item>
       <title>脏页大小 - 18446744073709551614 ?!</title>
       <link>https://fuweid.com/post/2024-dirtypage-2/</link>
