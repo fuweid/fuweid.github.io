@@ -3,9 +3,184 @@
         <title>Fu, Wei</title>
         <link>https://fuweid.com/</link>
         <copyright>2024 Wei Fu</copyright>
-        <lastBuildDate>Thu, 06 Jun 2024 07:47:45 +0800</lastBuildDate>
+        <lastBuildDate>Mon, 10 Jun 2024 14:00:45 +0800</lastBuildDate>
         <atom:link href="/" rel="self" type="application/rss+xml" />
 
+        
+        <item>
+          <title>[CONT] Non-Preemptible RCU soft lockup: zap_pid_ns_processes</title>
+          <link>/post/2024-rcu-soft-lockup-zap_pid_ns_processes-2/</link>
+          <pubDate>Mon, 10 Jun 2024 14:00:45 +0800</pubDate>
+          <guid>https://fuweid.com/post/2024-rcu-soft-lockup-zap_pid_ns_processes-2/</guid>
+          <description>&lt;p&gt;接着上一篇 &lt;a href=&#34;https://fuweid.com/post/2024-rcu-soft-lockup-zap_pid_ns_processes-1/&#34;&gt;Non-Preemptible RCU soft lockup: zap_pid_ns_processes&lt;/a&gt;。
+根据内核维护者的回复和修复补丁，已经确定是和 &lt;a href=&#34;https://man7.org/linux/man-pages/man7/io_uring.7.html&#34;&gt;io_uring(7)&lt;/a&gt; worker 唤醒机制有关。&lt;/p&gt;
+&lt;h2 id=&#34;io_uring-io-wq-worker-pool&#34;&gt;io_uring io-wq worker pool&lt;/h2&gt;
+&lt;p&gt;根据 &lt;a href=&#34;https://lwn.net/Articles/803070/&#34;&gt;Redesigned workqueues for io_uring&lt;/a&gt; 文章的描述，io_uring 使用 &lt;a href=&#34;https://docs.kernel.org/core-api/workqueue.html&#34;&gt;workqueue&lt;/a&gt; 处理异步 IO 请求有局限性，
+因此在 &lt;a href=&#34;https://lore.kernel.org/linux-block/20191024134439.28498-1-axboe@kernel.dk/T/#m22034ebbbc1a932ddb412af354e2a3bb25da0e08&#34;&gt;io-wq: small threadpool implementation for io_uring&lt;/a&gt; 补丁里开始用线程池来替代 workqueue。&lt;/p&gt;
+&lt;p&gt;当用户态进程通过 &lt;a href=&#34;https://www.man7.org/linux/man-pages/man2/io_uring_enter.2.html&#34;&gt;io_uring_enter(2)&lt;/a&gt; 系统调用提交 io 请求，io_uring 模块会将 io 请求放入到队列里，
+并按需创建内核线程 &lt;a href=&#34;https://elixir.bootlin.com/linux/v5.15.160/source/io_uring/io-wq.c#L619&#34;&gt;io_wqe_worker&lt;/a&gt; 来处理请求，如下图的上半部分。&lt;/p&gt;
+&lt;p&gt;&lt;img src=&#34;https://fuweid.com/img/2024-rcu-soft-lockup-zap_pid_ns_processes/missing-manuals-io_uring-worker-pool-1.png&#34; alt=&#34;missing-manuals-io_uring-worker-pool-1&#34;&gt;&lt;/p&gt;
+&lt;blockquote&gt;
+&lt;p&gt;NOTE: 该图来源于 &lt;a href=&#34;https://blog.cloudflare.com/missing-manuals-io_uring-worker-pool&#34;&gt;https://blog.cloudflare.com/missing-manuals-io_uring-worker-pool&lt;/a&gt;&lt;/p&gt;
+&lt;/blockquote&gt;
+&lt;p&gt;以该 &lt;a href=&#34;https://github.com/rlmenge/rcu-soft-lock-issue-repro/blob/662b8e414ff15d75419e2286b8121b7c2049a37c/npm/package.json#L4&#34;&gt;package.json&lt;/a&gt; 为例，nodejs-20.11.0 默认开启 io_uring，在 &lt;code&gt;npm run done&lt;/code&gt; 前，nodejs 会利用 &lt;a href=&#34;https://github.com/libuv/libuv/blob/eb5af8e3c0ea19a6b0196d5db3212dae1785739b/src/unix/linux.c#L1050&#34;&gt;uv__iou_fs_statx&lt;/a&gt; 函数来获取当前文件系统的信息。
+这个 io_uring statx io 请求会触发内核创建 io_wqe_worker 线程。
+那么我们看下 &lt;code&gt;npm run zombie&lt;/code&gt; 长时间运行的程序都有哪些线程。
+如下图的下半部分为例，&lt;code&gt;1147997&lt;/code&gt; 进程有两个 &lt;code&gt;iou-wrk-1148006&lt;/code&gt; 的线程。
+io_wqe_worker 线程会以调用 io_uring_enter 的线程 ID 来命名 &lt;code&gt;iou-wrk-%d&lt;/code&gt;，
+因此 &lt;code&gt;iou-wrk-1148006&lt;/code&gt; 内核线程是由 &lt;code&gt;1148006&lt;/code&gt; 线程创建的。&lt;/p&gt;
+&lt;p&gt;&lt;img src=&#34;https://fuweid.com/img/2024-rcu-soft-lockup-zap_pid_ns_processes/strace-k-npm-run-done.png&#34; alt=&#34;strace-k-npm-run-done&#34;&gt;&lt;/p&gt;
+&lt;p&gt;&lt;img src=&#34;https://fuweid.com/img/2024-rcu-soft-lockup-zap_pid_ns_processes/npm-run-zombie-1.png&#34; alt=&#34;npm-run-zombie-1&#34;&gt;&lt;/p&gt;
+&lt;p&gt;当创建 io_wqe_worker 的用户线程退出时，那么内核会在 &lt;a href=&#34;https://elixir.bootlin.com/linux/v5.15.160/source/include/linux/io_uring.h#L13&#34;&gt;do_exit.io_uring_files_cancel&lt;/a&gt; 函数里唤醒 worker 并告知它应该结束工作。&lt;/p&gt;
+&lt;h2 id=&#34;tif_notify_signal&#34;&gt;TIF_NOTIFY_SIGNAL&lt;/h2&gt;
+&lt;p&gt;就目前了解到细节来看，线程的信号处理更像是调度处理（以打标记为主）。
+负责发送信号的线程除了添加信号信息外，它还需要把目标线程标记上 &lt;code&gt;TIF_SIGPENDING&lt;/code&gt;；
+当目标线程准备从系统调用返回用户态时，目标线程会在 &lt;a href=&#34;https://elixir.bootlin.com/linux/v5.15.160/source/kernel/entry/common.c#L157&#34;&gt;exit_to_user_mode_loop&lt;/a&gt; 检查 &lt;code&gt;TIF_SIGPENDING&lt;/code&gt; 是否存在；
+如有信号到来，那么线程将调用 &lt;a href=&#34;https://elixir.bootlin.com/linux/v5.15.160/source/kernel/entry/common.c#L149&#34;&gt;handle_signal_work&lt;/a&gt; 处理信号，它有可能会回到用户态，比如用户自定义的 SIGUSR1 信号处理。
+同样，io_uring 也是通过添加 &lt;code&gt;TIF_SIGPENDING&lt;/code&gt; 标记的方式来唤醒 io_wqe_worker。&lt;/p&gt;
+&lt;p&gt;但根据 &lt;a href=&#34;https://lore.kernel.org/lkml/20201008152752.218889-5-axboe@kernel.dk/&#34;&gt;task_work: use TIF_NOTIFY_SIGNAL if available&lt;/a&gt; 补丁来看，
+早期 io_uring 通过 &lt;code&gt;jobctl&lt;/code&gt; 来进行信号标记，但这个方式需要对线程的 &lt;code&gt;task-&amp;gt;sighand&lt;/code&gt; 属性进行加锁；
+当进程是多线程程序时，锁对性能的影响比较大。因此 io_uring 引入了新的标记 &lt;code&gt;TIF_NOTIFY_SIGNAL&lt;/code&gt; 避免锁的影响。&lt;/p&gt;
+&lt;p&gt;当创建 io_wqe_worker 的线程退出后，那么该线程会把 &lt;code&gt;IO_WQ_BIT_EXIT&lt;/code&gt; 标记成 &lt;code&gt;1&lt;/code&gt;,
+并将所有相关的 io_wqe_worker 线程都标记上 &lt;code&gt;TIF_NOTIFY_SIGNAL&lt;/code&gt; 并唤醒让其退出。&lt;/p&gt;
+&lt;p&gt;但我们看看 io_wqe_worker 关键代码，整个过程里，该线程只有在 &lt;a href=&#34;https://elixir.bootlin.com/linux/v5.15.160/source/io_uring/io-wq.c#L524&#34;&gt;io_flush_signals&lt;/a&gt; 里有机会消除这个 &lt;code&gt;TIF_NOTIFY_SIGNAL&lt;/code&gt; 标记，
+那么 io_wqe_worker 线程是有可能带着这个标记进入到 zap_pid_ns_processes 阶段，从而导致 CPU 无法运行其他线程。&lt;/p&gt;
+&lt;div class=&#34;highlight&#34;&gt;&lt;pre class=&#34;chroma&#34;&gt;&lt;code class=&#34;language-c&#34; data-lang=&#34;c&#34;&gt;&lt;span class=&#34;c1&#34;&gt;// v5.15.160
+&lt;/span&gt;&lt;span class=&#34;c1&#34;&gt;&lt;/span&gt;&lt;span class=&#34;k&#34;&gt;static&lt;/span&gt; &lt;span class=&#34;kt&#34;&gt;int&lt;/span&gt; &lt;span class=&#34;nf&#34;&gt;io_wqe_worker&lt;/span&gt;&lt;span class=&#34;p&#34;&gt;(&lt;/span&gt;&lt;span class=&#34;kt&#34;&gt;void&lt;/span&gt; &lt;span class=&#34;o&#34;&gt;*&lt;/span&gt;&lt;span class=&#34;n&#34;&gt;data&lt;/span&gt;&lt;span class=&#34;p&#34;&gt;)&lt;/span&gt;
+&lt;span class=&#34;p&#34;&gt;{&lt;/span&gt;
+	&lt;span class=&#34;c1&#34;&gt;// ...
+&lt;/span&gt;&lt;span class=&#34;c1&#34;&gt;&lt;/span&gt;	&lt;span class=&#34;c1&#34;&gt;// IO_WQ_BIT_EXIT=1 表示 worker 应该结束工作
+&lt;/span&gt;&lt;span class=&#34;c1&#34;&gt;&lt;/span&gt;	&lt;span class=&#34;k&#34;&gt;while&lt;/span&gt; &lt;span class=&#34;p&#34;&gt;(&lt;/span&gt;&lt;span class=&#34;o&#34;&gt;!&lt;/span&gt;&lt;span class=&#34;n&#34;&gt;test_bit&lt;/span&gt;&lt;span class=&#34;p&#34;&gt;(&lt;/span&gt;&lt;span class=&#34;n&#34;&gt;IO_WQ_BIT_EXIT&lt;/span&gt;&lt;span class=&#34;p&#34;&gt;,&lt;/span&gt; &lt;span class=&#34;o&#34;&gt;&amp;amp;&lt;/span&gt;&lt;span class=&#34;n&#34;&gt;wq&lt;/span&gt;&lt;span class=&#34;o&#34;&gt;-&amp;gt;&lt;/span&gt;&lt;span class=&#34;n&#34;&gt;state&lt;/span&gt;&lt;span class=&#34;p&#34;&gt;))&lt;/span&gt; &lt;span class=&#34;p&#34;&gt;{&lt;/span&gt;
+		&lt;span class=&#34;c1&#34;&gt;// ...
+&lt;/span&gt;&lt;span class=&#34;c1&#34;&gt;&lt;/span&gt;
+		&lt;span class=&#34;c1&#34;&gt;// 清除 TIF_NOTIFY_SIGNAL
+&lt;/span&gt;&lt;span class=&#34;c1&#34;&gt;&lt;/span&gt;		&lt;span class=&#34;k&#34;&gt;if&lt;/span&gt; &lt;span class=&#34;p&#34;&gt;(&lt;/span&gt;&lt;span class=&#34;n&#34;&gt;io_flush_signals&lt;/span&gt;&lt;span class=&#34;p&#34;&gt;())&lt;/span&gt;
+			&lt;span class=&#34;k&#34;&gt;continue&lt;/span&gt;&lt;span class=&#34;p&#34;&gt;;&lt;/span&gt;
+
+		&lt;span class=&#34;c1&#34;&gt;// 没任务时，将进入睡眠态
+&lt;/span&gt;&lt;span class=&#34;c1&#34;&gt;&lt;/span&gt;		&lt;span class=&#34;n&#34;&gt;ret&lt;/span&gt; &lt;span class=&#34;o&#34;&gt;=&lt;/span&gt; &lt;span class=&#34;n&#34;&gt;schedule_timeout&lt;/span&gt;&lt;span class=&#34;p&#34;&gt;(&lt;/span&gt;&lt;span class=&#34;n&#34;&gt;WORKER_IDLE_TIMEOUT&lt;/span&gt;&lt;span class=&#34;p&#34;&gt;);&lt;/span&gt;
+
+		&lt;span class=&#34;c1&#34;&gt;// 检查当前线程是否有以下两个标记
+&lt;/span&gt;&lt;span class=&#34;c1&#34;&gt;&lt;/span&gt;		&lt;span class=&#34;c1&#34;&gt;//   TIF_SIGPENDING
+&lt;/span&gt;&lt;span class=&#34;c1&#34;&gt;&lt;/span&gt;		&lt;span class=&#34;c1&#34;&gt;//   TIF_NOTIFY_SIGNAL
+&lt;/span&gt;&lt;span class=&#34;c1&#34;&gt;&lt;/span&gt;		&lt;span class=&#34;k&#34;&gt;if&lt;/span&gt; &lt;span class=&#34;p&#34;&gt;(&lt;/span&gt;&lt;span class=&#34;n&#34;&gt;signal_pending&lt;/span&gt;&lt;span class=&#34;p&#34;&gt;(&lt;/span&gt;&lt;span class=&#34;n&#34;&gt;current&lt;/span&gt;&lt;span class=&#34;p&#34;&gt;))&lt;/span&gt; &lt;span class=&#34;p&#34;&gt;{&lt;/span&gt;
+			&lt;span class=&#34;k&#34;&gt;struct&lt;/span&gt; &lt;span class=&#34;n&#34;&gt;ksignal&lt;/span&gt; &lt;span class=&#34;n&#34;&gt;ksig&lt;/span&gt;&lt;span class=&#34;p&#34;&gt;;&lt;/span&gt;
+
+			&lt;span class=&#34;c1&#34;&gt;// 取出信号
+&lt;/span&gt;&lt;span class=&#34;c1&#34;&gt;&lt;/span&gt;			&lt;span class=&#34;k&#34;&gt;if&lt;/span&gt; &lt;span class=&#34;p&#34;&gt;(&lt;/span&gt;&lt;span class=&#34;o&#34;&gt;!&lt;/span&gt;&lt;span class=&#34;n&#34;&gt;get_signal&lt;/span&gt;&lt;span class=&#34;p&#34;&gt;(&lt;/span&gt;&lt;span class=&#34;o&#34;&gt;&amp;amp;&lt;/span&gt;&lt;span class=&#34;n&#34;&gt;ksig&lt;/span&gt;&lt;span class=&#34;p&#34;&gt;))&lt;/span&gt;
+				&lt;span class=&#34;k&#34;&gt;continue&lt;/span&gt;&lt;span class=&#34;p&#34;&gt;;&lt;/span&gt;
+			&lt;span class=&#34;k&#34;&gt;break&lt;/span&gt;&lt;span class=&#34;p&#34;&gt;;&lt;/span&gt;
+		&lt;span class=&#34;p&#34;&gt;}&lt;/span&gt;
+		&lt;span class=&#34;c1&#34;&gt;// ...
+&lt;/span&gt;&lt;span class=&#34;c1&#34;&gt;&lt;/span&gt;	&lt;span class=&#34;p&#34;&gt;}&lt;/span&gt;
+	&lt;span class=&#34;c1&#34;&gt;// ...
+&lt;/span&gt;&lt;span class=&#34;c1&#34;&gt;&lt;/span&gt;	&lt;span class=&#34;c1&#34;&gt;// 调用 do_exit(0);
+&lt;/span&gt;&lt;span class=&#34;c1&#34;&gt;&lt;/span&gt;	&lt;span class=&#34;n&#34;&gt;io_worker_exit&lt;/span&gt;&lt;span class=&#34;p&#34;&gt;(&lt;/span&gt;&lt;span class=&#34;n&#34;&gt;worker&lt;/span&gt;&lt;span class=&#34;p&#34;&gt;);&lt;/span&gt; 
+&lt;span class=&#34;p&#34;&gt;}&lt;/span&gt;
+&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;h2 id=&#34;io_wqe_worker-thread-is-last-one-in-init&#34;&gt;io_wqe_worker thread is last one in init&lt;/h2&gt;
+&lt;p&gt;现在有一个进程 X，它运行在新的 &lt;a href=&#34;https://man7.org/linux/man-pages/man7/pid_namespaces.7.html&#34;&gt;pid_namespace(7)&lt;/a&gt; 以及 &lt;a href=&#34;https://man7.org/linux/man-pages/man7/mount_namespaces.7.html&#34;&gt;mount_namespace(7)&lt;/a&gt; 里。
+它只有两个线程，它们分别是 X-1 以及 X-iou-wrk-1。除此之外，X 还有一个孩子进程 Y。
+进程 Y 和 X 运行在相同的 &lt;a href=&#34;https://man7.org/linux/man-pages/man7/namespaces.7.html&#34;&gt;namespace&lt;/a&gt; 下。&lt;/p&gt;
+&lt;p&gt;进程 X 作为它所在 pid_namespace 里是 &lt;strong&gt;一号进程&lt;/strong&gt;。
+当进程 X 主线程 X-1 退出时，它会给 X-iou-wrk-1 线程发送 SIGKILL 信号并唤醒它。
+如果 X-iou-wrk-1 线程还没完全从 io_wqe_worker 上下文里结束，线程 X-1 有机会给 X-iou-wrk-1 标记上 &lt;code&gt;TIF_NOTIFY_SIGNAL&lt;/code&gt;。&lt;/p&gt;
+&lt;p&gt;如果 X-1 提前结束, X-iou-wrk-1 将会是一号进程里唯一非 zombie 线程，
+它将负责清理在这个 pid_namespace 下的所有进程，比如这里的进程 Y。
+线程 X-iou-wrk-1 将进入 zap_pid_ns_processes 来清理进程 Y。&lt;/p&gt;
+&lt;div class=&#34;highlight&#34;&gt;&lt;pre class=&#34;chroma&#34;&gt;&lt;code class=&#34;language-c&#34; data-lang=&#34;c&#34;&gt;&lt;span class=&#34;c1&#34;&gt;// v5.15.160
+&lt;/span&gt;&lt;span class=&#34;c1&#34;&gt;&lt;/span&gt;&lt;span class=&#34;kt&#34;&gt;void&lt;/span&gt; &lt;span class=&#34;nf&#34;&gt;zap_pid_ns_processes&lt;/span&gt;&lt;span class=&#34;p&#34;&gt;(&lt;/span&gt;&lt;span class=&#34;k&#34;&gt;struct&lt;/span&gt; &lt;span class=&#34;n&#34;&gt;pid_namespace&lt;/span&gt; &lt;span class=&#34;o&#34;&gt;*&lt;/span&gt;&lt;span class=&#34;n&#34;&gt;pid_ns&lt;/span&gt;&lt;span class=&#34;p&#34;&gt;)&lt;/span&gt;
+&lt;span class=&#34;p&#34;&gt;{&lt;/span&gt;
+	&lt;span class=&#34;c1&#34;&gt;// ...
+&lt;/span&gt;&lt;span class=&#34;c1&#34;&gt;&lt;/span&gt;
+	&lt;span class=&#34;c1&#34;&gt;// 给当前 pid_namespace 下的所有线程发送 SIGKILL
+&lt;/span&gt;&lt;span class=&#34;c1&#34;&gt;&lt;/span&gt;	&lt;span class=&#34;c1&#34;&gt;// 根据前面的假设，这里只有进程 Y。
+&lt;/span&gt;&lt;span class=&#34;c1&#34;&gt;&lt;/span&gt;	&lt;span class=&#34;n&#34;&gt;rcu_read_lock&lt;/span&gt;&lt;span class=&#34;p&#34;&gt;();&lt;/span&gt;
+	&lt;span class=&#34;n&#34;&gt;read_lock&lt;/span&gt;&lt;span class=&#34;p&#34;&gt;(&lt;/span&gt;&lt;span class=&#34;o&#34;&gt;&amp;amp;&lt;/span&gt;&lt;span class=&#34;n&#34;&gt;tasklist_lock&lt;/span&gt;&lt;span class=&#34;p&#34;&gt;);&lt;/span&gt;
+	&lt;span class=&#34;n&#34;&gt;nr&lt;/span&gt; &lt;span class=&#34;o&#34;&gt;=&lt;/span&gt; &lt;span class=&#34;mi&#34;&gt;2&lt;/span&gt;&lt;span class=&#34;p&#34;&gt;;&lt;/span&gt;
+	&lt;span class=&#34;n&#34;&gt;idr_for_each_entry_continue&lt;/span&gt;&lt;span class=&#34;p&#34;&gt;(&lt;/span&gt;&lt;span class=&#34;o&#34;&gt;&amp;amp;&lt;/span&gt;&lt;span class=&#34;n&#34;&gt;pid_ns&lt;/span&gt;&lt;span class=&#34;o&#34;&gt;-&amp;gt;&lt;/span&gt;&lt;span class=&#34;n&#34;&gt;idr&lt;/span&gt;&lt;span class=&#34;p&#34;&gt;,&lt;/span&gt; &lt;span class=&#34;n&#34;&gt;pid&lt;/span&gt;&lt;span class=&#34;p&#34;&gt;,&lt;/span&gt; &lt;span class=&#34;n&#34;&gt;nr&lt;/span&gt;&lt;span class=&#34;p&#34;&gt;)&lt;/span&gt; &lt;span class=&#34;p&#34;&gt;{&lt;/span&gt;
+		&lt;span class=&#34;n&#34;&gt;task&lt;/span&gt; &lt;span class=&#34;o&#34;&gt;=&lt;/span&gt; &lt;span class=&#34;n&#34;&gt;pid_task&lt;/span&gt;&lt;span class=&#34;p&#34;&gt;(&lt;/span&gt;&lt;span class=&#34;n&#34;&gt;pid&lt;/span&gt;&lt;span class=&#34;p&#34;&gt;,&lt;/span&gt; &lt;span class=&#34;n&#34;&gt;PIDTYPE_PID&lt;/span&gt;&lt;span class=&#34;p&#34;&gt;);&lt;/span&gt;
+		&lt;span class=&#34;k&#34;&gt;if&lt;/span&gt; &lt;span class=&#34;p&#34;&gt;(&lt;/span&gt;&lt;span class=&#34;n&#34;&gt;task&lt;/span&gt; &lt;span class=&#34;o&#34;&gt;&amp;amp;&amp;amp;&lt;/span&gt; &lt;span class=&#34;o&#34;&gt;!&lt;/span&gt;&lt;span class=&#34;n&#34;&gt;__fatal_signal_pending&lt;/span&gt;&lt;span class=&#34;p&#34;&gt;(&lt;/span&gt;&lt;span class=&#34;n&#34;&gt;task&lt;/span&gt;&lt;span class=&#34;p&#34;&gt;))&lt;/span&gt;
+			&lt;span class=&#34;n&#34;&gt;group_send_sig_info&lt;/span&gt;&lt;span class=&#34;p&#34;&gt;(&lt;/span&gt;&lt;span class=&#34;n&#34;&gt;SIGKILL&lt;/span&gt;&lt;span class=&#34;p&#34;&gt;,&lt;/span&gt; &lt;span class=&#34;n&#34;&gt;SEND_SIG_PRIV&lt;/span&gt;&lt;span class=&#34;p&#34;&gt;,&lt;/span&gt; &lt;span class=&#34;n&#34;&gt;task&lt;/span&gt;&lt;span class=&#34;p&#34;&gt;,&lt;/span&gt; &lt;span class=&#34;n&#34;&gt;PIDTYPE_MAX&lt;/span&gt;&lt;span class=&#34;p&#34;&gt;);&lt;/span&gt;
+	&lt;span class=&#34;p&#34;&gt;}&lt;/span&gt;
+	&lt;span class=&#34;n&#34;&gt;read_unlock&lt;/span&gt;&lt;span class=&#34;p&#34;&gt;(&lt;/span&gt;&lt;span class=&#34;o&#34;&gt;&amp;amp;&lt;/span&gt;&lt;span class=&#34;n&#34;&gt;tasklist_lock&lt;/span&gt;&lt;span class=&#34;p&#34;&gt;);&lt;/span&gt;
+	&lt;span class=&#34;n&#34;&gt;rcu_read_unlock&lt;/span&gt;&lt;span class=&#34;p&#34;&gt;();&lt;/span&gt;
+
+	&lt;span class=&#34;c1&#34;&gt;// 给进程 Y 发送 SIGKILL 后，还需要回收 Y
+&lt;/span&gt;&lt;span class=&#34;c1&#34;&gt;&lt;/span&gt;	&lt;span class=&#34;k&#34;&gt;do&lt;/span&gt; &lt;span class=&#34;p&#34;&gt;{&lt;/span&gt;
+		&lt;span class=&#34;c1&#34;&gt;// 清理掉 TIF_SIGPENDING
+&lt;/span&gt;&lt;span class=&#34;c1&#34;&gt;&lt;/span&gt;		&lt;span class=&#34;c1&#34;&gt;// 如果有新来的 TIF_SIGPENDING 信号
+&lt;/span&gt;&lt;span class=&#34;c1&#34;&gt;&lt;/span&gt;		&lt;span class=&#34;c1&#34;&gt;// 那么 kernel_wait4 就有机会释放 CPU
+&lt;/span&gt;&lt;span class=&#34;c1&#34;&gt;&lt;/span&gt;		&lt;span class=&#34;n&#34;&gt;clear_thread_flag&lt;/span&gt;&lt;span class=&#34;p&#34;&gt;(&lt;/span&gt;&lt;span class=&#34;n&#34;&gt;TIF_SIGPENDING&lt;/span&gt;&lt;span class=&#34;p&#34;&gt;);&lt;/span&gt;
+		&lt;span class=&#34;n&#34;&gt;rc&lt;/span&gt; &lt;span class=&#34;o&#34;&gt;=&lt;/span&gt; &lt;span class=&#34;n&#34;&gt;kernel_wait4&lt;/span&gt;&lt;span class=&#34;p&#34;&gt;(&lt;/span&gt;&lt;span class=&#34;o&#34;&gt;-&lt;/span&gt;&lt;span class=&#34;mi&#34;&gt;1&lt;/span&gt;&lt;span class=&#34;p&#34;&gt;,&lt;/span&gt; &lt;span class=&#34;nb&#34;&gt;NULL&lt;/span&gt;&lt;span class=&#34;p&#34;&gt;,&lt;/span&gt; &lt;span class=&#34;n&#34;&gt;__WALL&lt;/span&gt;&lt;span class=&#34;p&#34;&gt;,&lt;/span&gt; &lt;span class=&#34;nb&#34;&gt;NULL&lt;/span&gt;&lt;span class=&#34;p&#34;&gt;);&lt;/span&gt;
+	&lt;span class=&#34;p&#34;&gt;}&lt;/span&gt; &lt;span class=&#34;k&#34;&gt;while&lt;/span&gt; &lt;span class=&#34;p&#34;&gt;(&lt;/span&gt;&lt;span class=&#34;n&#34;&gt;rc&lt;/span&gt; &lt;span class=&#34;o&#34;&gt;!=&lt;/span&gt; &lt;span class=&#34;o&#34;&gt;-&lt;/span&gt;&lt;span class=&#34;n&#34;&gt;ECHILD&lt;/span&gt;&lt;span class=&#34;p&#34;&gt;);&lt;/span&gt;
+
+	&lt;span class=&#34;c1&#34;&gt;// ...
+&lt;/span&gt;&lt;span class=&#34;c1&#34;&gt;&lt;/span&gt;&lt;span class=&#34;p&#34;&gt;}&lt;/span&gt;
+&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;p&gt;&lt;a href=&#34;https://elixir.bootlin.com/linux/v5.15.160/source/kernel/exit.c#L1554&#34;&gt;kernel_wait4.do_wait&lt;/a&gt; 遇到没有可以回收的线程时，它会判断是否需要处理信号。
+如果没有信号需要处理，那么它将调用 &lt;a href=&#34;https://elixir.bootlin.com/linux/v5.15.160/source/kernel/sched/core.c#L6452&#34;&gt;schedule&lt;/a&gt; 来释放当前 CPU。
+在没有开启抢占模式的内核下，进入内核态的线程只能主动释放 CPU，比如结束系统调用或者主动调用 schedule。
+不然它将长期霸占所在的 CPU。&lt;/p&gt;
+&lt;div class=&#34;highlight&#34;&gt;&lt;pre class=&#34;chroma&#34;&gt;&lt;code class=&#34;language-c&#34; data-lang=&#34;c&#34;&gt;&lt;span class=&#34;c1&#34;&gt;// v5.15.160
+&lt;/span&gt;&lt;span class=&#34;c1&#34;&gt;&lt;/span&gt;&lt;span class=&#34;k&#34;&gt;static&lt;/span&gt; &lt;span class=&#34;kt&#34;&gt;long&lt;/span&gt; &lt;span class=&#34;nf&#34;&gt;do_wait&lt;/span&gt;&lt;span class=&#34;p&#34;&gt;(&lt;/span&gt;&lt;span class=&#34;k&#34;&gt;struct&lt;/span&gt; &lt;span class=&#34;n&#34;&gt;wait_opts&lt;/span&gt; &lt;span class=&#34;o&#34;&gt;*&lt;/span&gt;&lt;span class=&#34;n&#34;&gt;wo&lt;/span&gt;&lt;span class=&#34;p&#34;&gt;)&lt;/span&gt;
+&lt;span class=&#34;p&#34;&gt;{&lt;/span&gt;
+	
+	&lt;span class=&#34;c1&#34;&gt;// ...
+&lt;/span&gt;&lt;span class=&#34;c1&#34;&gt;&lt;/span&gt;
+&lt;span class=&#34;nl&#34;&gt;notask&lt;/span&gt;&lt;span class=&#34;p&#34;&gt;:&lt;/span&gt;
+	&lt;span class=&#34;n&#34;&gt;retval&lt;/span&gt; &lt;span class=&#34;o&#34;&gt;=&lt;/span&gt; &lt;span class=&#34;n&#34;&gt;wo&lt;/span&gt;&lt;span class=&#34;o&#34;&gt;-&amp;gt;&lt;/span&gt;&lt;span class=&#34;n&#34;&gt;notask_error&lt;/span&gt;&lt;span class=&#34;p&#34;&gt;;&lt;/span&gt;
+	&lt;span class=&#34;k&#34;&gt;if&lt;/span&gt; &lt;span class=&#34;p&#34;&gt;(&lt;/span&gt;&lt;span class=&#34;o&#34;&gt;!&lt;/span&gt;&lt;span class=&#34;n&#34;&gt;retval&lt;/span&gt; &lt;span class=&#34;o&#34;&gt;&amp;amp;&amp;amp;&lt;/span&gt; &lt;span class=&#34;o&#34;&gt;!&lt;/span&gt;&lt;span class=&#34;p&#34;&gt;(&lt;/span&gt;&lt;span class=&#34;n&#34;&gt;wo&lt;/span&gt;&lt;span class=&#34;o&#34;&gt;-&amp;gt;&lt;/span&gt;&lt;span class=&#34;n&#34;&gt;wo_flags&lt;/span&gt; &lt;span class=&#34;o&#34;&gt;&amp;amp;&lt;/span&gt; &lt;span class=&#34;n&#34;&gt;WNOHANG&lt;/span&gt;&lt;span class=&#34;p&#34;&gt;))&lt;/span&gt; &lt;span class=&#34;p&#34;&gt;{&lt;/span&gt;
+		&lt;span class=&#34;n&#34;&gt;retval&lt;/span&gt; &lt;span class=&#34;o&#34;&gt;=&lt;/span&gt; &lt;span class=&#34;o&#34;&gt;-&lt;/span&gt;&lt;span class=&#34;n&#34;&gt;ERESTARTSYS&lt;/span&gt;&lt;span class=&#34;p&#34;&gt;;&lt;/span&gt;
+		&lt;span class=&#34;c1&#34;&gt;// 没有可以回收线程，比如 D 状态的线程
+&lt;/span&gt;&lt;span class=&#34;c1&#34;&gt;&lt;/span&gt;		&lt;span class=&#34;c1&#34;&gt;// 假设没有信号需要处理，那么线程主动释放 CPU
+&lt;/span&gt;&lt;span class=&#34;c1&#34;&gt;&lt;/span&gt;		&lt;span class=&#34;k&#34;&gt;if&lt;/span&gt; &lt;span class=&#34;p&#34;&gt;(&lt;/span&gt;&lt;span class=&#34;o&#34;&gt;!&lt;/span&gt;&lt;span class=&#34;n&#34;&gt;signal_pending&lt;/span&gt;&lt;span class=&#34;p&#34;&gt;(&lt;/span&gt;&lt;span class=&#34;n&#34;&gt;current&lt;/span&gt;&lt;span class=&#34;p&#34;&gt;))&lt;/span&gt; &lt;span class=&#34;p&#34;&gt;{&lt;/span&gt;
+			&lt;span class=&#34;n&#34;&gt;schedule&lt;/span&gt;&lt;span class=&#34;p&#34;&gt;();&lt;/span&gt;
+			&lt;span class=&#34;k&#34;&gt;goto&lt;/span&gt; &lt;span class=&#34;n&#34;&gt;repeat&lt;/span&gt;&lt;span class=&#34;p&#34;&gt;;&lt;/span&gt;
+		&lt;span class=&#34;p&#34;&gt;}&lt;/span&gt;
+	&lt;span class=&#34;p&#34;&gt;}&lt;/span&gt;
+ 
+	&lt;span class=&#34;c1&#34;&gt;// ...
+&lt;/span&gt;&lt;span class=&#34;c1&#34;&gt;&lt;/span&gt;&lt;span class=&#34;p&#34;&gt;}&lt;/span&gt;
+&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;p&gt;然而线程 X-iou-wrk-1 身上一直有 &lt;code&gt;TIF_NOTIFY_SIGNAL&lt;/code&gt; 标记，导致 &lt;a href=&#34;https://elixir.bootlin.com/linux/v5.15.160/source/include/linux/sched/signal.h#L361&#34;&gt;signal_pending&lt;/a&gt; 一直返回 &lt;code&gt;True&lt;/code&gt;, 它永远都走不到 &lt;code&gt;schedule&lt;/code&gt; 这个函数。
+而进程 Y 收到信号后退出，它是最后一个引用 mount_namespace 的进程，
+它将负责回收 mount_namespace 相关的资源，并进入到 &lt;code&gt;synchronize_rcu_expedited&lt;/code&gt; 函数。
+而 &lt;code&gt;synchronize_rcu_expedited&lt;/code&gt; 要求所有 CPU 都要上报静止态，也就是至少发生过一次上下文切换。
+但线程 X-iou-wrk-1 并不会释放 CPU，所以进程 Y 无法从 &lt;code&gt;synchronize_rcu_expedited&lt;/code&gt; 中离开从而长期处于 D 状态，形成了一个死锁。&lt;/p&gt;
+&lt;div class=&#34;highlight&#34;&gt;&lt;pre class=&#34;chroma&#34;&gt;&lt;code class=&#34;language-bash&#34; data-lang=&#34;bash&#34;&gt;&lt;span class=&#34;c1&#34;&gt;# 进程 Y&lt;/span&gt;
+$ sudo cat /proc/2522605/task/2522645/stack
+&lt;span class=&#34;o&#34;&gt;[&lt;/span&gt;&amp;lt;0&amp;gt;&lt;span class=&#34;o&#34;&gt;]&lt;/span&gt; synchronize_rcu_expedited+0x177/0x1f0
+&lt;span class=&#34;o&#34;&gt;[&lt;/span&gt;&amp;lt;0&amp;gt;&lt;span class=&#34;o&#34;&gt;]&lt;/span&gt; namespace_unlock+0xd6/0x1b0
+&lt;span class=&#34;o&#34;&gt;[&lt;/span&gt;&amp;lt;0&amp;gt;&lt;span class=&#34;o&#34;&gt;]&lt;/span&gt; put_mnt_ns+0x73/0xa0
+&lt;span class=&#34;o&#34;&gt;[&lt;/span&gt;&amp;lt;0&amp;gt;&lt;span class=&#34;o&#34;&gt;]&lt;/span&gt; free_nsproxy+0x1c/0x1b0
+&lt;span class=&#34;o&#34;&gt;[&lt;/span&gt;&amp;lt;0&amp;gt;&lt;span class=&#34;o&#34;&gt;]&lt;/span&gt; switch_task_namespaces+0x5d/0x70
+&lt;span class=&#34;o&#34;&gt;[&lt;/span&gt;&amp;lt;0&amp;gt;&lt;span class=&#34;o&#34;&gt;]&lt;/span&gt; exit_task_namespaces+0x10/0x20
+&lt;span class=&#34;o&#34;&gt;[&lt;/span&gt;&amp;lt;0&amp;gt;&lt;span class=&#34;o&#34;&gt;]&lt;/span&gt; do_exit+0x2ce/0x500
+&lt;span class=&#34;o&#34;&gt;[&lt;/span&gt;&amp;lt;0&amp;gt;&lt;span class=&#34;o&#34;&gt;]&lt;/span&gt; io_sq_thread+0x48e/0x5a0
+&lt;span class=&#34;o&#34;&gt;[&lt;/span&gt;&amp;lt;0&amp;gt;&lt;span class=&#34;o&#34;&gt;]&lt;/span&gt; ret_from_fork+0x3c/0x60
+&lt;span class=&#34;o&#34;&gt;[&lt;/span&gt;&amp;lt;0&amp;gt;&lt;span class=&#34;o&#34;&gt;]&lt;/span&gt; ret_from_fork_asm+0x1b/0x30
+
+$ sudo cat /proc/2522605/task/2522645/status
+Name: iou-sqp-2522605
+State: D &lt;span class=&#34;o&#34;&gt;(&lt;/span&gt;disk sleep&lt;span class=&#34;o&#34;&gt;)&lt;/span&gt;
+&lt;span class=&#34;c1&#34;&gt;# ...&lt;/span&gt;
+&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;p&gt;后续任何回收 mount_namespace 的操作都将卡死，只有重启系统才可以缓解。
+这个问题的修复也比较简单，就是在进入 kernel_wait4 之前清理掉 &lt;code&gt;TIF_NOTIFY_SIGNAL&lt;/code&gt; 标记即可。&lt;/p&gt;
+&lt;div class=&#34;highlight&#34;&gt;&lt;pre class=&#34;chroma&#34;&gt;&lt;code class=&#34;language-diff&#34; data-lang=&#34;diff&#34;&gt;&lt;span class=&#34;gh&#34;&gt;diff --git a/kernel/pid_namespace.c b/kernel/pid_namespace.c
+&lt;/span&gt;&lt;span class=&#34;gh&#34;&gt;index dc48fecfa1dc..25f3cf679b35 100644
+&lt;/span&gt;&lt;span class=&#34;gh&#34;&gt;&lt;/span&gt;&lt;span class=&#34;gd&#34;&gt;--- a/kernel/pid_namespace.c
+&lt;/span&gt;&lt;span class=&#34;gd&#34;&gt;&lt;/span&gt;&lt;span class=&#34;gi&#34;&gt;+++ b/kernel/pid_namespace.c
+&lt;/span&gt;&lt;span class=&#34;gi&#34;&gt;&lt;/span&gt;&lt;span class=&#34;gu&#34;&gt;@@ -218,6 +218,7 @@ void zap_pid_ns_processes(struct pid_namespace *pid_ns)
+&lt;/span&gt;&lt;span class=&#34;gu&#34;&gt;&lt;/span&gt; 	 */
+ 	do {
+ 		clear_thread_flag(TIF_SIGPENDING);
+&lt;span class=&#34;gi&#34;&gt;+		clear_thread_flag(TIF_NOTIFY_SIGNAL);
+&lt;/span&gt;&lt;span class=&#34;gi&#34;&gt;&lt;/span&gt; 		rc = kernel_wait4(-1, NULL, __WALL, NULL);
+ 	} while (rc != -ECHILD);
+&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;h2 id=&#34;summary&#34;&gt;Summary&lt;/h2&gt;
+&lt;p&gt;如果你是从事容器开发的朋友，应该对函数 zap_pid_ns_processes 不陌生，遇到就只能献上重启大法 QQ。
+本次分享的问题只有使用 io_uring 的容器应用才会遇到。对于 nodejs 而言，如果 io_uring 不是刚需，可以考虑用 &lt;a href=&#34;https://nodejs.org/api/cli.html#uv_use_io_uringvalue&#34;&gt;UV_USE_IO_URING=0&lt;/a&gt; 关闭掉。&lt;/p&gt;
+&lt;p&gt;最后，根据内核大佬的说法，zap_pid_ns_processes 这个函数已经遇到过很多问题，不排除还有其他坑 T.T。&lt;/p&gt;
+</description>
+        </item>
         
         <item>
           <title>Non-Preemptible RCU soft lockup: zap_pid_ns_processes</title>

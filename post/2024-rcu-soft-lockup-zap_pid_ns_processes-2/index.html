@@ -1,0 +1,253 @@
+<!DOCTYPE html>
+<html>
+    <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+    <title>
+        
+            Fu, Wei: [CONT] Non-Preemptible RCU soft lockup: zap_pid_ns_processes
+        
+    </title>
+
+    <meta property="og:title" content="[CONT] Non-Preemptible RCU soft lockup: zap_pid_ns_processes"/>
+    <meta property="og:Section" content="website"/>
+    <meta property="og:url" content="https://fuweid.com/post/2024-rcu-soft-lockup-zap_pid_ns_processes-2/"/>
+    <meta property="og:image" content="https://fuweid.com/favicon.jpg"/>
+    <meta property="og:site_name" content="Fu, Wei"/>
+    <meta property="og:description" content="第一次参与内核代码的测试!"/>
+
+    <link rel="stylesheet" href="/css/fontawesome/all.css" />
+    <link rel="stylesheet" href="/css/main.css" /> 
+    <link rel="stylesheet" href="/css/normalize.css">
+    <link rel="stylesheet" href="/css/prettify.css">
+    <link rel="shortcut icon" href="https://fuweid.com/favicon.jpg">
+    <link rel="icon" href="https://fuweid.com/favicon.jpg">
+    <script type="text/javascript" src="/js/prettify.js"></script>
+</head>
+
+
+    <body onload="doPrettify()">
+        <header>
+    <nav>
+        <ul class="home">
+            <li>
+                <a href="https://fuweid.com/">Fu, Wei</a>
+            </li>
+        </ul>
+        <ul class="social">
+            <li>
+                <a class="fab fa-github" href="https://github.com/fuweid" target="_blank"></a>
+            </li>
+            <li>
+                <a class="fab fa-twitter" href="https://twitter.com/fuweid89" target="_blank"></a>
+            </li>
+            <li>
+                <a class="fas fa-rss" href="https://fuweid.com//index.xml" target="_blank"></a>
+            </li>
+        </ul>
+    </nav>
+</header>
+
+
+        <div class="container">
+            <article class="single">
+                <h1 class="title"> [CONT] Non-Preemptible RCU soft lockup: zap_pid_ns_processes </h1>
+                <h4 class="time"> June 10, 2024 </h4>
+                <p>接着上一篇 <a href="https://fuweid.com/post/2024-rcu-soft-lockup-zap_pid_ns_processes-1/">Non-Preemptible RCU soft lockup: zap_pid_ns_processes</a>。
+根据内核维护者的回复和修复补丁，已经确定是和 <a href="https://man7.org/linux/man-pages/man7/io_uring.7.html">io_uring(7)</a> worker 唤醒机制有关。</p>
+<h2 id="io_uring-io-wq-worker-pool">io_uring io-wq worker pool</h2>
+<p>根据 <a href="https://lwn.net/Articles/803070/">Redesigned workqueues for io_uring</a> 文章的描述，io_uring 使用 <a href="https://docs.kernel.org/core-api/workqueue.html">workqueue</a> 处理异步 IO 请求有局限性，
+因此在 <a href="https://lore.kernel.org/linux-block/20191024134439.28498-1-axboe@kernel.dk/T/#m22034ebbbc1a932ddb412af354e2a3bb25da0e08">io-wq: small threadpool implementation for io_uring</a> 补丁里开始用线程池来替代 workqueue。</p>
+<p>当用户态进程通过 <a href="https://www.man7.org/linux/man-pages/man2/io_uring_enter.2.html">io_uring_enter(2)</a> 系统调用提交 io 请求，io_uring 模块会将 io 请求放入到队列里，
+并按需创建内核线程 <a href="https://elixir.bootlin.com/linux/v5.15.160/source/io_uring/io-wq.c#L619">io_wqe_worker</a> 来处理请求，如下图的上半部分。</p>
+<p><img src="/img/2024-rcu-soft-lockup-zap_pid_ns_processes/missing-manuals-io_uring-worker-pool-1.png" alt="missing-manuals-io_uring-worker-pool-1"></p>
+<blockquote>
+<p>NOTE: 该图来源于 <a href="https://blog.cloudflare.com/missing-manuals-io_uring-worker-pool">https://blog.cloudflare.com/missing-manuals-io_uring-worker-pool</a></p>
+</blockquote>
+<p>以该 <a href="https://github.com/rlmenge/rcu-soft-lock-issue-repro/blob/662b8e414ff15d75419e2286b8121b7c2049a37c/npm/package.json#L4">package.json</a> 为例，nodejs-20.11.0 默认开启 io_uring，在 <code>npm run done</code> 前，nodejs 会利用 <a href="https://github.com/libuv/libuv/blob/eb5af8e3c0ea19a6b0196d5db3212dae1785739b/src/unix/linux.c#L1050">uv__iou_fs_statx</a> 函数来获取当前文件系统的信息。
+这个 io_uring statx io 请求会触发内核创建 io_wqe_worker 线程。
+那么我们看下 <code>npm run zombie</code> 长时间运行的程序都有哪些线程。
+如下图的下半部分为例，<code>1147997</code> 进程有两个 <code>iou-wrk-1148006</code> 的线程。
+io_wqe_worker 线程会以调用 io_uring_enter 的线程 ID 来命名 <code>iou-wrk-%d</code>，
+因此 <code>iou-wrk-1148006</code> 内核线程是由 <code>1148006</code> 线程创建的。</p>
+<p><img src="/img/2024-rcu-soft-lockup-zap_pid_ns_processes/strace-k-npm-run-done.png" alt="strace-k-npm-run-done"></p>
+<p><img src="/img/2024-rcu-soft-lockup-zap_pid_ns_processes/npm-run-zombie-1.png" alt="npm-run-zombie-1"></p>
+<p>当创建 io_wqe_worker 的用户线程退出时，那么内核会在 <a href="https://elixir.bootlin.com/linux/v5.15.160/source/include/linux/io_uring.h#L13">do_exit.io_uring_files_cancel</a> 函数里唤醒 worker 并告知它应该结束工作。</p>
+<h2 id="tif_notify_signal">TIF_NOTIFY_SIGNAL</h2>
+<p>就目前了解到细节来看，线程的信号处理更像是调度处理（以打标记为主）。
+负责发送信号的线程除了添加信号信息外，它还需要把目标线程标记上 <code>TIF_SIGPENDING</code>；
+当目标线程准备从系统调用返回用户态时，目标线程会在 <a href="https://elixir.bootlin.com/linux/v5.15.160/source/kernel/entry/common.c#L157">exit_to_user_mode_loop</a> 检查 <code>TIF_SIGPENDING</code> 是否存在；
+如有信号到来，那么线程将调用 <a href="https://elixir.bootlin.com/linux/v5.15.160/source/kernel/entry/common.c#L149">handle_signal_work</a> 处理信号，它有可能会回到用户态，比如用户自定义的 SIGUSR1 信号处理。
+同样，io_uring 也是通过添加 <code>TIF_SIGPENDING</code> 标记的方式来唤醒 io_wqe_worker。</p>
+<p>但根据 <a href="https://lore.kernel.org/lkml/20201008152752.218889-5-axboe@kernel.dk/">task_work: use TIF_NOTIFY_SIGNAL if available</a> 补丁来看，
+早期 io_uring 通过 <code>jobctl</code> 来进行信号标记，但这个方式需要对线程的 <code>task-&gt;sighand</code> 属性进行加锁；
+当进程是多线程程序时，锁对性能的影响比较大。因此 io_uring 引入了新的标记 <code>TIF_NOTIFY_SIGNAL</code> 避免锁的影响。</p>
+<p>当创建 io_wqe_worker 的线程退出后，那么该线程会把 <code>IO_WQ_BIT_EXIT</code> 标记成 <code>1</code>,
+并将所有相关的 io_wqe_worker 线程都标记上 <code>TIF_NOTIFY_SIGNAL</code> 并唤醒让其退出。</p>
+<p>但我们看看 io_wqe_worker 关键代码，整个过程里，该线程只有在 <a href="https://elixir.bootlin.com/linux/v5.15.160/source/io_uring/io-wq.c#L524">io_flush_signals</a> 里有机会消除这个 <code>TIF_NOTIFY_SIGNAL</code> 标记，
+那么 io_wqe_worker 线程是有可能带着这个标记进入到 zap_pid_ns_processes 阶段，从而导致 CPU 无法运行其他线程。</p>
+<div class="highlight"><pre class="chroma"><code class="language-c" data-lang="c"><span class="c1">// v5.15.160
+</span><span class="c1"></span><span class="k">static</span> <span class="kt">int</span> <span class="nf">io_wqe_worker</span><span class="p">(</span><span class="kt">void</span> <span class="o">*</span><span class="n">data</span><span class="p">)</span>
+<span class="p">{</span>
+	<span class="c1">// ...
+</span><span class="c1"></span>	<span class="c1">// IO_WQ_BIT_EXIT=1 表示 worker 应该结束工作
+</span><span class="c1"></span>	<span class="k">while</span> <span class="p">(</span><span class="o">!</span><span class="n">test_bit</span><span class="p">(</span><span class="n">IO_WQ_BIT_EXIT</span><span class="p">,</span> <span class="o">&amp;</span><span class="n">wq</span><span class="o">-&gt;</span><span class="n">state</span><span class="p">))</span> <span class="p">{</span>
+		<span class="c1">// ...
+</span><span class="c1"></span>
+		<span class="c1">// 清除 TIF_NOTIFY_SIGNAL
+</span><span class="c1"></span>		<span class="k">if</span> <span class="p">(</span><span class="n">io_flush_signals</span><span class="p">())</span>
+			<span class="k">continue</span><span class="p">;</span>
+
+		<span class="c1">// 没任务时，将进入睡眠态
+</span><span class="c1"></span>		<span class="n">ret</span> <span class="o">=</span> <span class="n">schedule_timeout</span><span class="p">(</span><span class="n">WORKER_IDLE_TIMEOUT</span><span class="p">);</span>
+
+		<span class="c1">// 检查当前线程是否有以下两个标记
+</span><span class="c1"></span>		<span class="c1">//   TIF_SIGPENDING
+</span><span class="c1"></span>		<span class="c1">//   TIF_NOTIFY_SIGNAL
+</span><span class="c1"></span>		<span class="k">if</span> <span class="p">(</span><span class="n">signal_pending</span><span class="p">(</span><span class="n">current</span><span class="p">))</span> <span class="p">{</span>
+			<span class="k">struct</span> <span class="n">ksignal</span> <span class="n">ksig</span><span class="p">;</span>
+
+			<span class="c1">// 取出信号
+</span><span class="c1"></span>			<span class="k">if</span> <span class="p">(</span><span class="o">!</span><span class="n">get_signal</span><span class="p">(</span><span class="o">&amp;</span><span class="n">ksig</span><span class="p">))</span>
+				<span class="k">continue</span><span class="p">;</span>
+			<span class="k">break</span><span class="p">;</span>
+		<span class="p">}</span>
+		<span class="c1">// ...
+</span><span class="c1"></span>	<span class="p">}</span>
+	<span class="c1">// ...
+</span><span class="c1"></span>	<span class="c1">// 调用 do_exit(0);
+</span><span class="c1"></span>	<span class="n">io_worker_exit</span><span class="p">(</span><span class="n">worker</span><span class="p">);</span> 
+<span class="p">}</span>
+</code></pre></div><h2 id="io_wqe_worker-thread-is-last-one-in-init">io_wqe_worker thread is last one in init</h2>
+<p>现在有一个进程 X，它运行在新的 <a href="https://man7.org/linux/man-pages/man7/pid_namespaces.7.html">pid_namespace(7)</a> 以及 <a href="https://man7.org/linux/man-pages/man7/mount_namespaces.7.html">mount_namespace(7)</a> 里。
+它只有两个线程，它们分别是 X-1 以及 X-iou-wrk-1。除此之外，X 还有一个孩子进程 Y。
+进程 Y 和 X 运行在相同的 <a href="https://man7.org/linux/man-pages/man7/namespaces.7.html">namespace</a> 下。</p>
+<p>进程 X 作为它所在 pid_namespace 里是 <strong>一号进程</strong>。
+当进程 X 主线程 X-1 退出时，它会给 X-iou-wrk-1 线程发送 SIGKILL 信号并唤醒它。
+如果 X-iou-wrk-1 线程还没完全从 io_wqe_worker 上下文里结束，线程 X-1 有机会给 X-iou-wrk-1 标记上 <code>TIF_NOTIFY_SIGNAL</code>。</p>
+<p>如果 X-1 提前结束, X-iou-wrk-1 将会是一号进程里唯一非 zombie 线程，
+它将负责清理在这个 pid_namespace 下的所有进程，比如这里的进程 Y。
+线程 X-iou-wrk-1 将进入 zap_pid_ns_processes 来清理进程 Y。</p>
+<div class="highlight"><pre class="chroma"><code class="language-c" data-lang="c"><span class="c1">// v5.15.160
+</span><span class="c1"></span><span class="kt">void</span> <span class="nf">zap_pid_ns_processes</span><span class="p">(</span><span class="k">struct</span> <span class="n">pid_namespace</span> <span class="o">*</span><span class="n">pid_ns</span><span class="p">)</span>
+<span class="p">{</span>
+	<span class="c1">// ...
+</span><span class="c1"></span>
+	<span class="c1">// 给当前 pid_namespace 下的所有线程发送 SIGKILL
+</span><span class="c1"></span>	<span class="c1">// 根据前面的假设，这里只有进程 Y。
+</span><span class="c1"></span>	<span class="n">rcu_read_lock</span><span class="p">();</span>
+	<span class="n">read_lock</span><span class="p">(</span><span class="o">&amp;</span><span class="n">tasklist_lock</span><span class="p">);</span>
+	<span class="n">nr</span> <span class="o">=</span> <span class="mi">2</span><span class="p">;</span>
+	<span class="n">idr_for_each_entry_continue</span><span class="p">(</span><span class="o">&amp;</span><span class="n">pid_ns</span><span class="o">-&gt;</span><span class="n">idr</span><span class="p">,</span> <span class="n">pid</span><span class="p">,</span> <span class="n">nr</span><span class="p">)</span> <span class="p">{</span>
+		<span class="n">task</span> <span class="o">=</span> <span class="n">pid_task</span><span class="p">(</span><span class="n">pid</span><span class="p">,</span> <span class="n">PIDTYPE_PID</span><span class="p">);</span>
+		<span class="k">if</span> <span class="p">(</span><span class="n">task</span> <span class="o">&amp;&amp;</span> <span class="o">!</span><span class="n">__fatal_signal_pending</span><span class="p">(</span><span class="n">task</span><span class="p">))</span>
+			<span class="n">group_send_sig_info</span><span class="p">(</span><span class="n">SIGKILL</span><span class="p">,</span> <span class="n">SEND_SIG_PRIV</span><span class="p">,</span> <span class="n">task</span><span class="p">,</span> <span class="n">PIDTYPE_MAX</span><span class="p">);</span>
+	<span class="p">}</span>
+	<span class="n">read_unlock</span><span class="p">(</span><span class="o">&amp;</span><span class="n">tasklist_lock</span><span class="p">);</span>
+	<span class="n">rcu_read_unlock</span><span class="p">();</span>
+
+	<span class="c1">// 给进程 Y 发送 SIGKILL 后，还需要回收 Y
+</span><span class="c1"></span>	<span class="k">do</span> <span class="p">{</span>
+		<span class="c1">// 清理掉 TIF_SIGPENDING
+</span><span class="c1"></span>		<span class="c1">// 如果有新来的 TIF_SIGPENDING 信号
+</span><span class="c1"></span>		<span class="c1">// 那么 kernel_wait4 就有机会释放 CPU
+</span><span class="c1"></span>		<span class="n">clear_thread_flag</span><span class="p">(</span><span class="n">TIF_SIGPENDING</span><span class="p">);</span>
+		<span class="n">rc</span> <span class="o">=</span> <span class="n">kernel_wait4</span><span class="p">(</span><span class="o">-</span><span class="mi">1</span><span class="p">,</span> <span class="nb">NULL</span><span class="p">,</span> <span class="n">__WALL</span><span class="p">,</span> <span class="nb">NULL</span><span class="p">);</span>
+	<span class="p">}</span> <span class="k">while</span> <span class="p">(</span><span class="n">rc</span> <span class="o">!=</span> <span class="o">-</span><span class="n">ECHILD</span><span class="p">);</span>
+
+	<span class="c1">// ...
+</span><span class="c1"></span><span class="p">}</span>
+</code></pre></div><p><a href="https://elixir.bootlin.com/linux/v5.15.160/source/kernel/exit.c#L1554">kernel_wait4.do_wait</a> 遇到没有可以回收的线程时，它会判断是否需要处理信号。
+如果没有信号需要处理，那么它将调用 <a href="https://elixir.bootlin.com/linux/v5.15.160/source/kernel/sched/core.c#L6452">schedule</a> 来释放当前 CPU。
+在没有开启抢占模式的内核下，进入内核态的线程只能主动释放 CPU，比如结束系统调用或者主动调用 schedule。
+不然它将长期霸占所在的 CPU。</p>
+<div class="highlight"><pre class="chroma"><code class="language-c" data-lang="c"><span class="c1">// v5.15.160
+</span><span class="c1"></span><span class="k">static</span> <span class="kt">long</span> <span class="nf">do_wait</span><span class="p">(</span><span class="k">struct</span> <span class="n">wait_opts</span> <span class="o">*</span><span class="n">wo</span><span class="p">)</span>
+<span class="p">{</span>
+	
+	<span class="c1">// ...
+</span><span class="c1"></span>
+<span class="nl">notask</span><span class="p">:</span>
+	<span class="n">retval</span> <span class="o">=</span> <span class="n">wo</span><span class="o">-&gt;</span><span class="n">notask_error</span><span class="p">;</span>
+	<span class="k">if</span> <span class="p">(</span><span class="o">!</span><span class="n">retval</span> <span class="o">&amp;&amp;</span> <span class="o">!</span><span class="p">(</span><span class="n">wo</span><span class="o">-&gt;</span><span class="n">wo_flags</span> <span class="o">&amp;</span> <span class="n">WNOHANG</span><span class="p">))</span> <span class="p">{</span>
+		<span class="n">retval</span> <span class="o">=</span> <span class="o">-</span><span class="n">ERESTARTSYS</span><span class="p">;</span>
+		<span class="c1">// 没有可以回收线程，比如 D 状态的线程
+</span><span class="c1"></span>		<span class="c1">// 假设没有信号需要处理，那么线程主动释放 CPU
+</span><span class="c1"></span>		<span class="k">if</span> <span class="p">(</span><span class="o">!</span><span class="n">signal_pending</span><span class="p">(</span><span class="n">current</span><span class="p">))</span> <span class="p">{</span>
+			<span class="n">schedule</span><span class="p">();</span>
+			<span class="k">goto</span> <span class="n">repeat</span><span class="p">;</span>
+		<span class="p">}</span>
+	<span class="p">}</span>
+ 
+	<span class="c1">// ...
+</span><span class="c1"></span><span class="p">}</span>
+</code></pre></div><p>然而线程 X-iou-wrk-1 身上一直有 <code>TIF_NOTIFY_SIGNAL</code> 标记，导致 <a href="https://elixir.bootlin.com/linux/v5.15.160/source/include/linux/sched/signal.h#L361">signal_pending</a> 一直返回 <code>True</code>, 它永远都走不到 <code>schedule</code> 这个函数。
+而进程 Y 收到信号后退出，它是最后一个引用 mount_namespace 的进程，
+它将负责回收 mount_namespace 相关的资源，并进入到 <code>synchronize_rcu_expedited</code> 函数。
+而 <code>synchronize_rcu_expedited</code> 要求所有 CPU 都要上报静止态，也就是至少发生过一次上下文切换。
+但线程 X-iou-wrk-1 并不会释放 CPU，所以进程 Y 无法从 <code>synchronize_rcu_expedited</code> 中离开从而长期处于 D 状态，形成了一个死锁。</p>
+<div class="highlight"><pre class="chroma"><code class="language-bash" data-lang="bash"><span class="c1"># 进程 Y</span>
+$ sudo cat /proc/2522605/task/2522645/stack
+<span class="o">[</span>&lt;0&gt;<span class="o">]</span> synchronize_rcu_expedited+0x177/0x1f0
+<span class="o">[</span>&lt;0&gt;<span class="o">]</span> namespace_unlock+0xd6/0x1b0
+<span class="o">[</span>&lt;0&gt;<span class="o">]</span> put_mnt_ns+0x73/0xa0
+<span class="o">[</span>&lt;0&gt;<span class="o">]</span> free_nsproxy+0x1c/0x1b0
+<span class="o">[</span>&lt;0&gt;<span class="o">]</span> switch_task_namespaces+0x5d/0x70
+<span class="o">[</span>&lt;0&gt;<span class="o">]</span> exit_task_namespaces+0x10/0x20
+<span class="o">[</span>&lt;0&gt;<span class="o">]</span> do_exit+0x2ce/0x500
+<span class="o">[</span>&lt;0&gt;<span class="o">]</span> io_sq_thread+0x48e/0x5a0
+<span class="o">[</span>&lt;0&gt;<span class="o">]</span> ret_from_fork+0x3c/0x60
+<span class="o">[</span>&lt;0&gt;<span class="o">]</span> ret_from_fork_asm+0x1b/0x30
+
+$ sudo cat /proc/2522605/task/2522645/status
+Name: iou-sqp-2522605
+State: D <span class="o">(</span>disk sleep<span class="o">)</span>
+<span class="c1"># ...</span>
+</code></pre></div><p>后续任何回收 mount_namespace 的操作都将卡死，只有重启系统才可以缓解。
+这个问题的修复也比较简单，就是在进入 kernel_wait4 之前清理掉 <code>TIF_NOTIFY_SIGNAL</code> 标记即可。</p>
+<div class="highlight"><pre class="chroma"><code class="language-diff" data-lang="diff"><span class="gh">diff --git a/kernel/pid_namespace.c b/kernel/pid_namespace.c
+</span><span class="gh">index dc48fecfa1dc..25f3cf679b35 100644
+</span><span class="gh"></span><span class="gd">--- a/kernel/pid_namespace.c
+</span><span class="gd"></span><span class="gi">+++ b/kernel/pid_namespace.c
+</span><span class="gi"></span><span class="gu">@@ -218,6 +218,7 @@ void zap_pid_ns_processes(struct pid_namespace *pid_ns)
+</span><span class="gu"></span> 	 */
+ 	do {
+ 		clear_thread_flag(TIF_SIGPENDING);
+<span class="gi">+		clear_thread_flag(TIF_NOTIFY_SIGNAL);
+</span><span class="gi"></span> 		rc = kernel_wait4(-1, NULL, __WALL, NULL);
+ 	} while (rc != -ECHILD);
+</code></pre></div><h2 id="summary">Summary</h2>
+<p>如果你是从事容器开发的朋友，应该对函数 zap_pid_ns_processes 不陌生，遇到就只能献上重启大法 QQ。
+本次分享的问题只有使用 io_uring 的容器应用才会遇到。对于 nodejs 而言，如果 io_uring 不是刚需，可以考虑用 <a href="https://nodejs.org/api/cli.html#uv_use_io_uringvalue">UV_USE_IO_URING=0</a> 关闭掉。</p>
+<p>最后，根据内核大佬的说法，zap_pid_ns_processes 这个函数已经遇到过很多问题，不排除还有其他坑 T.T。</p>
+
+            </article>
+        </div>
+
+        <footer>
+    &copy; 2024 Fu Wei
+</footer>
+
+<script>
+    function doPrettify(){
+        pres=document.getElementsByTagName('pre');
+        for (i=0; i < pres.length; i++) {
+            pres[i].className+=" prettyprint";
+        }
+        prettyPrint();
+    }
+</script>
+
+
+<script async src="https://www.googletagmanager.com/gtag/js?id=G-1C7VLVHN52"></script>
+<script>
+  window.dataLayer = window.dataLayer || [];
+  function gtag(){dataLayer.push(arguments);}
+  gtag('js', new Date());
+
+  gtag('config', 'G-1C7VLVHN52');
+</script>
+
+    </body>
+</html>

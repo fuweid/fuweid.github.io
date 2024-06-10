@@ -3,17 +3,22 @@
   xmlns:xhtml="http://www.w3.org/1999/xhtml">
   
   <url>
-    <loc>https://fuweid.com/</loc>
-    <lastmod>2024-06-06T07:47:45+08:00</lastmod>
+    <loc>https://fuweid.com/post/2024-rcu-soft-lockup-zap_pid_ns_processes-2/</loc>
+    <lastmod>2024-06-10T14:00:45+08:00</lastmod>
   </url>
   
   <url>
-    <loc>https://fuweid.com/post/2024-rcu-soft-lockup-zap_pid_ns_processes-1/</loc>
-    <lastmod>2024-06-06T07:47:45+08:00</lastmod>
+    <loc>https://fuweid.com/</loc>
+    <lastmod>2024-06-10T14:00:45+08:00</lastmod>
   </url>
   
   <url>
     <loc>https://fuweid.com/post/</loc>
+    <lastmod>2024-06-10T14:00:45+08:00</lastmod>
+  </url>
+  
+  <url>
+    <loc>https://fuweid.com/post/2024-rcu-soft-lockup-zap_pid_ns_processes-1/</loc>
     <lastmod>2024-06-06T07:47:45+08:00</lastmod>
   </url>
   

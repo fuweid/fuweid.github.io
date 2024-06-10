@@ -5,7 +5,20 @@
     <link>https://fuweid.com/post/</link>
     <description>Recent content in Posts on Fu, Wei</description>
     <generator>Hugo -- gohugo.io</generator>
-    <lastBuildDate>Thu, 06 Jun 2024 07:47:45 +0800</lastBuildDate><atom:link href="https://fuweid.com/post/index.xml" rel="self" type="application/rss+xml" />
+    <lastBuildDate>Mon, 10 Jun 2024 14:00:45 +0800</lastBuildDate><atom:link href="https://fuweid.com/post/index.xml" rel="self" type="application/rss+xml" />
+    <item>
+      <title>[CONT] Non-Preemptible RCU soft lockup: zap_pid_ns_processes</title>
+      <link>https://fuweid.com/post/2024-rcu-soft-lockup-zap_pid_ns_processes-2/</link>
+      <pubDate>Mon, 10 Jun 2024 14:00:45 +0800</pubDate>
+      
+      <guid>https://fuweid.com/post/2024-rcu-soft-lockup-zap_pid_ns_processes-2/</guid>
+      <description>接着上一篇 Non-Preemptible RCU soft lockup: zap_pid_ns_processes。 根据内核维护者的回复和修复补丁，已经确定是和 io_uring(7) worker 唤醒机制有关。
+io_uring io-wq worker pool 根据 Redesigned workqueues for io_uring 文章的描述，io_uring 使用 workqueue 处理异步 IO 请求有局限性， 因此在 io-wq: small threadpool implementation for io_uring 补丁里开始用线程池来替代 workqueue。
+当用户态进程通过 io_uring_enter(2) 系统调用提交 io 请求，io_uring 模块会将 io 请求放入到队列里， 并按需创建内核线程 io_wqe_worker 来处理请求，如下图的上半部分。
+ NOTE: 该图来源于 https://blog.cloudflare.com/missing-manuals-io_uring-worker-pool
+ 以该 package.json 为例，nodejs-20.11.0 默认开启 io_uring，在 npm run done 前，nodejs 会利用 uv__iou_fs_statx 函数来获取当前文件系统的信息。 这个 io_uring statx io 请求会触发内核创建 io_wqe_worker 线程。 那么我们看下 npm run zombie 长时间运行的程序都有哪些线程。 如下图的下半部分为例，1147997 进程有两个 iou-wrk-1148006 的线程。 io_wqe_worker 线程会以调用 io_uring_enter 的线程 ID 来命名 iou-wrk-%d， 因此 iou-wrk-1148006 内核线程是由 1148006 线程创建的。</description>
+    </item>
+    
     <item>
       <title>Non-Preemptible RCU soft lockup: zap_pid_ns_processes</title>
       <link>https://fuweid.com/post/2024-rcu-soft-lockup-zap_pid_ns_processes-1/</link>
