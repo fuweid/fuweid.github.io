@@ -5,7 +5,18 @@
     <link>https://fuweid.com/post/</link>
     <description>Recent content in Posts on Fu, Wei</description>
     <generator>Hugo -- gohugo.io</generator>
-    <lastBuildDate>Mon, 10 Jun 2024 14:00:45 +0800</lastBuildDate><atom:link href="https://fuweid.com/post/index.xml" rel="self" type="application/rss+xml" />
+    <lastBuildDate>Tue, 03 Sep 2024 07:47:45 +0800</lastBuildDate><atom:link href="https://fuweid.com/post/index.xml" rel="self" type="application/rss+xml" />
+    <item>
+      <title>退群「Hall of shame」</title>
+      <link>https://fuweid.com/post/2024-ptrace-hallofshame/</link>
+      <pubDate>Tue, 03 Sep 2024 07:47:45 +0800</pubDate>
+      
+      <guid>https://fuweid.com/post/2024-ptrace-hallofshame/</guid>
+      <description>在 GO 1.23 版本中，GO Linker 将来会限制 //go:linkname 直接引用标准库中不可访问的对象。 看到这个消息后，我立刻用 GO 1.23.0 编译了 containerd，发现即使不加 -checklinkname=0 也能正常工作。 之前为了支持 ID-mapped mount, 我在 containerd 项目里使用了 GO runtime 的隐藏功能，算是语言层面的灵活运用。 现在可倒好，GO 团队直接在代码里把 containerd 列为 Hall of shame 成员。 这种强行拉入群的形式实在无力吐槽，只能想想如何退群了。
+为什么要使用 go:linkname Kubernetes 社区之所以能落地 User Namespace 特性，是因为 Linux 社区在 2022 年引入了 ID-mapped mount 的概念。 原先，文件属性中的 UID 和 GID 是固定的，只有特定的用户或用户组才能访问相应的文件。 容器镜像中的文件大多是由 root 用户创建的，如果要让非特权用户访问镜像中的所有内容，过去唯一的办法是使用 chown -R 来物理改变所有文件的 UID 和 GID。
+   Image Size Inodes overlayfs w/ metacopy overlayfs w/o metacopy     tensorflow/tensorflow:latest 1489MiB 32596 1.</description>
+    </item>
+    
     <item>
       <title>[CONT] Non-Preemptible RCU soft lockup: zap_pid_ns_processes</title>
       <link>https://fuweid.com/post/2024-rcu-soft-lockup-zap_pid_ns_processes-2/</link>

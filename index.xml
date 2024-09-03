@@ -3,9 +3,166 @@
         <title>Fu, Wei</title>
         <link>https://fuweid.com/</link>
         <copyright>2024 Wei Fu</copyright>
-        <lastBuildDate>Mon, 10 Jun 2024 14:00:45 +0800</lastBuildDate>
+        <lastBuildDate>Tue, 03 Sep 2024 07:47:45 +0800</lastBuildDate>
         <atom:link href="/" rel="self" type="application/rss+xml" />
 
+        
+        <item>
+          <title>退群「Hall of shame」</title>
+          <link>/post/2024-ptrace-hallofshame/</link>
+          <pubDate>Tue, 03 Sep 2024 07:47:45 +0800</pubDate>
+          <guid>https://fuweid.com/post/2024-ptrace-hallofshame/</guid>
+          <description>&lt;p&gt;在 GO 1.23 版本中，&lt;a href=&#34;https://github.com/golang/go/issues/67401&#34;&gt;GO Linker 将来会限制 &lt;code&gt;//go:linkname&lt;/code&gt; 直接引用标准库中不可访问的对象&lt;/a&gt;。
+看到这个消息后，我立刻用 GO 1.23.0 编译了 containerd，发现即使不加 &lt;code&gt;-checklinkname=0&lt;/code&gt; 也能正常工作。
+之前为了支持 ID-mapped mount, 我在 containerd 项目里使用了 GO runtime 的隐藏功能，算是语言层面的灵活运用。
+现在可倒好，GO 团队直接在代码里把 containerd 列为 &lt;a href=&#34;https://github.com/golang/go/blob/a9e6a96ac092cc5191d759488ee761e9a403ab8f/src/runtime/proc.go#L4848&#34;&gt;Hall of shame&lt;/a&gt; 成员。
+这种强行拉入群的形式实在无力吐槽，只能想想如何退群了。&lt;/p&gt;
+&lt;h3 id=&#34;为什么要使用-golinkname&#34;&gt;为什么要使用 go:linkname&lt;/h3&gt;
+&lt;p&gt;Kubernetes 社区之所以能落地 User Namespace 特性，是因为 Linux 社区在 2022 年引入了 &lt;a href=&#34;https://lwn.net/Articles/896255/&#34;&gt;ID-mapped mount&lt;/a&gt; 的概念。
+原先，文件属性中的 UID 和 GID 是固定的，只有特定的用户或用户组才能访问相应的文件。
+容器镜像中的文件大多是由 root 用户创建的，如果要让非特权用户访问镜像中的所有内容，过去唯一的办法是使用 &lt;code&gt;chown -R&lt;/code&gt; 来物理改变所有文件的 UID 和 GID。&lt;/p&gt;
+&lt;table&gt;
+&lt;thead&gt;
+&lt;tr&gt;
+&lt;th&gt;Image&lt;/th&gt;
+&lt;th&gt;Size&lt;/th&gt;
+&lt;th&gt;Inodes&lt;/th&gt;
+&lt;th&gt;overlayfs w/ metacopy&lt;/th&gt;
+&lt;th&gt;overlayfs w/o metacopy&lt;/th&gt;
+&lt;/tr&gt;
+&lt;/thead&gt;
+&lt;tbody&gt;
+&lt;tr&gt;
+&lt;td&gt;tensorflow/tensorflow:latest&lt;/td&gt;
+&lt;td&gt;1489MiB&lt;/td&gt;
+&lt;td&gt;32596&lt;/td&gt;
+&lt;td&gt;1.29s&lt;/td&gt;
+&lt;td&gt;54.80s&lt;/td&gt;
+&lt;/tr&gt;
+&lt;tr&gt;
+&lt;td&gt;library/node:latest&lt;/td&gt;
+&lt;td&gt;1425MiB&lt;/td&gt;
+&lt;td&gt;33385&lt;/td&gt;
+&lt;td&gt;1.18s&lt;/td&gt;
+&lt;td&gt;52.86s&lt;/td&gt;
+&lt;/tr&gt;
+&lt;tr&gt;
+&lt;td&gt;library/ubuntu:22.04&lt;/td&gt;
+&lt;td&gt;83.4MiB&lt;/td&gt;
+&lt;td&gt;3517&lt;/td&gt;
+&lt;td&gt;0.15s&lt;/td&gt;
+&lt;td&gt;5.32s&lt;/td&gt;
+&lt;/tr&gt;
+&lt;/tbody&gt;
+&lt;/table&gt;
+&lt;p&gt;现在有了 ID-mapped mount 的功能后，原本只有 UID=0/GID=0 用户可以访问的目录，只需几次系统调用就可以让 UID=1001/GID=1001 的用户访问。
+ID-mapped mount 在内核层面实现 ID 映射，比传统的 &lt;code&gt;chown -R&lt;/code&gt; 方法在性能和效率上都有显著提升。&lt;/p&gt;
+&lt;p&gt;&lt;img src=&#34;https://fuweid.com/img/2023-containerd-17-userns/mount-idmapped-bind.png&#34; alt=&#34;mount-idmapped-bind&#34;&gt;&lt;/p&gt;
+&lt;blockquote&gt;
+&lt;p&gt;NOTE: 具体细节可以查看之前的文章 - &lt;a href=&#34;https://fuweid.com/post/2023-containerd-17-userns/&#34;&gt;containerd 1.7: UserNamespace Stateless Pod&lt;/a&gt;&lt;/p&gt;
+&lt;/blockquote&gt;
+&lt;p&gt;不过，ID-mapped mount 需要提供 &lt;a href=&#34;https://man7.org/linux/man-pages/man7/user_namespaces.7.html&#34;&gt;user_namespace(7)&lt;/a&gt; 的句柄信息，而这种信息只能通过创建新进程（使用 CLONE_USER）来获取（/proc/$PID/ns/user 句柄）。
+由于 GO 对多进程编程的支持有限，标准库中只有 &lt;a href=&#34;https://pkg.go.dev/os#StartProcess&#34;&gt;os.StartProcess&lt;/a&gt; 接口，而它采用了 fork 和 execve 组合的方式。
+换句话说，多进程的 官方 方法只能通过调用命令行来实现，这要求开发者为每个进程逻辑准备一个独立的二进制文件。
+为了简化运维，常见的做法是将每个独立逻辑封装成子命令，并通过调用自身的 &lt;code&gt;/proc/self/exe&lt;/code&gt; 来完成，这种方法被称为 &lt;code&gt;re-exec&lt;/code&gt;。&lt;/p&gt;
+&lt;p&gt;然而，这种方法的成本太高。相当于每个引用了 ID-mapped mount 功能的程序都需要一个专门的命令行来创建新的 user_namespace。
+因此，在 containerd 的 &lt;a href=&#34;https://github.com/containerd/containerd/blob/27de5fea738a38345aa1ac7569032261a6b1e562/pkg/sys/userns_unsafe_linux.go#L38&#34;&gt;GetUsernsFD&lt;/a&gt; 中，模拟了 os.StartProcess 的 fork 流程，并将最后的 execve 替换为 &lt;code&gt;syscall.RawSyscall(syscall.SYS_PPOLL, 0, 0, 0)&lt;/code&gt;，使子进程进入无限期的睡眠状态。
+这样，父进程 containerd 在 fork 返回时，子进程已经运行在新的 user_namespace 中，父进程可以安全地获取子进程的 user_namespace 句柄，而无需担心进程间的保活问题。&lt;/p&gt;
+&lt;p&gt;在整个 fork 过程中，子进程处于单线程模式，不具有完整的 GO runtime 逻辑。因此，需要使用 GO runtime 中的三个隐藏功能来屏蔽信号处理，并防止父子进程间发生栈大小的变化。这些隐藏功能只能通过 &lt;code&gt;//go:linkname&lt;/code&gt; 指令来激活。
+在我看来，这本属于灵活使用，本身 GO 标准库都是这么玩的 :)。&lt;/p&gt;
+&lt;div class=&#34;highlight&#34;&gt;&lt;pre class=&#34;chroma&#34;&gt;&lt;code class=&#34;language-go&#34; data-lang=&#34;go&#34;&gt;&lt;span class=&#34;c1&#34;&gt;//go:linkname beforeFork syscall.runtime_BeforeFork
+&lt;/span&gt;&lt;span class=&#34;c1&#34;&gt;&lt;/span&gt;&lt;span class=&#34;kd&#34;&gt;func&lt;/span&gt; &lt;span class=&#34;nf&#34;&gt;beforeFork&lt;/span&gt;&lt;span class=&#34;p&#34;&gt;()&lt;/span&gt;
+
+&lt;span class=&#34;c1&#34;&gt;//go:linkname afterFork syscall.runtime_AfterFork
+&lt;/span&gt;&lt;span class=&#34;c1&#34;&gt;&lt;/span&gt;&lt;span class=&#34;kd&#34;&gt;func&lt;/span&gt; &lt;span class=&#34;nf&#34;&gt;afterFork&lt;/span&gt;&lt;span class=&#34;p&#34;&gt;()&lt;/span&gt;
+
+&lt;span class=&#34;c1&#34;&gt;//go:linkname afterForkInChild syscall.runtime_AfterForkInChild
+&lt;/span&gt;&lt;span class=&#34;c1&#34;&gt;&lt;/span&gt;&lt;span class=&#34;kd&#34;&gt;func&lt;/span&gt; &lt;span class=&#34;nf&#34;&gt;afterForkInChild&lt;/span&gt;&lt;span class=&#34;p&#34;&gt;()&lt;/span&gt;
+&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;blockquote&gt;
+&lt;p&gt;当然，子进程也只能使用 RawSyscall 来完成初始化工作。这是为了避免进入不应该进入的流程，例如释放当前的执行线程。&lt;/p&gt;
+&lt;/blockquote&gt;
+&lt;h3 id=&#34;替换方案-ptrace&#34;&gt;替换方案 ptrace&lt;/h3&gt;
+&lt;p&gt;我并不想为了 fork 而引入一个子命令，所以给的选择也就只有 ptrace，如下面的代码所示。&lt;/p&gt;
+&lt;div class=&#34;highlight&#34;&gt;&lt;pre class=&#34;chroma&#34;&gt;&lt;code class=&#34;language-go&#34; data-lang=&#34;go&#34;&gt;&lt;span class=&#34;nx&#34;&gt;os&lt;/span&gt;&lt;span class=&#34;p&#34;&gt;.&lt;/span&gt;&lt;span class=&#34;nf&#34;&gt;StartProcess&lt;/span&gt;&lt;span class=&#34;p&#34;&gt;(&lt;/span&gt;&lt;span class=&#34;s&#34;&gt;&amp;#34;/proc/self/exe&amp;#34;&lt;/span&gt;&lt;span class=&#34;p&#34;&gt;,&lt;/span&gt; &lt;span class=&#34;p&#34;&gt;[]&lt;/span&gt;&lt;span class=&#34;kt&#34;&gt;string&lt;/span&gt;&lt;span class=&#34;p&#34;&gt;{&lt;/span&gt;&lt;span class=&#34;s&#34;&gt;&amp;#34;containerd[getUsernsFD]&amp;#34;&lt;/span&gt;&lt;span class=&#34;p&#34;&gt;},&lt;/span&gt; &lt;span class=&#34;o&#34;&gt;&amp;amp;&lt;/span&gt;&lt;span class=&#34;nx&#34;&gt;os&lt;/span&gt;&lt;span class=&#34;p&#34;&gt;.&lt;/span&gt;&lt;span class=&#34;nx&#34;&gt;ProcAttr&lt;/span&gt;&lt;span class=&#34;p&#34;&gt;{&lt;/span&gt;
+	&lt;span class=&#34;nx&#34;&gt;Sys&lt;/span&gt;&lt;span class=&#34;p&#34;&gt;:&lt;/span&gt; &lt;span class=&#34;o&#34;&gt;&amp;amp;&lt;/span&gt;&lt;span class=&#34;nx&#34;&gt;syscall&lt;/span&gt;&lt;span class=&#34;p&#34;&gt;.&lt;/span&gt;&lt;span class=&#34;nx&#34;&gt;SysProcAttr&lt;/span&gt;&lt;span class=&#34;p&#34;&gt;{&lt;/span&gt;
+		&lt;span class=&#34;nx&#34;&gt;Cloneflags&lt;/span&gt;&lt;span class=&#34;p&#34;&gt;:&lt;/span&gt;  &lt;span class=&#34;nx&#34;&gt;unix&lt;/span&gt;&lt;span class=&#34;p&#34;&gt;.&lt;/span&gt;&lt;span class=&#34;nx&#34;&gt;CLONE_NEWUSER&lt;/span&gt;&lt;span class=&#34;p&#34;&gt;,&lt;/span&gt;
+		&lt;span class=&#34;nx&#34;&gt;UidMappings&lt;/span&gt;&lt;span class=&#34;p&#34;&gt;:&lt;/span&gt; &lt;span class=&#34;nx&#34;&gt;uidMaps&lt;/span&gt;&lt;span class=&#34;p&#34;&gt;,&lt;/span&gt;
+		&lt;span class=&#34;nx&#34;&gt;GidMappings&lt;/span&gt;&lt;span class=&#34;p&#34;&gt;:&lt;/span&gt; &lt;span class=&#34;nx&#34;&gt;gidMaps&lt;/span&gt;&lt;span class=&#34;p&#34;&gt;,&lt;/span&gt;
+		&lt;span class=&#34;c1&#34;&gt;// NOTE: It&amp;#39;s reexec but it&amp;#39;s not heavy because subprocess
+&lt;/span&gt;&lt;span class=&#34;c1&#34;&gt;&lt;/span&gt;		&lt;span class=&#34;c1&#34;&gt;// be in PTRACE_TRACEME mode before performing execve.
+&lt;/span&gt;&lt;span class=&#34;c1&#34;&gt;&lt;/span&gt;		&lt;span class=&#34;nx&#34;&gt;Ptrace&lt;/span&gt;&lt;span class=&#34;p&#34;&gt;:&lt;/span&gt;    &lt;span class=&#34;kc&#34;&gt;true&lt;/span&gt;&lt;span class=&#34;p&#34;&gt;,&lt;/span&gt;
+		&lt;span class=&#34;nx&#34;&gt;Pdeathsig&lt;/span&gt;&lt;span class=&#34;p&#34;&gt;:&lt;/span&gt; &lt;span class=&#34;nx&#34;&gt;syscall&lt;/span&gt;&lt;span class=&#34;p&#34;&gt;.&lt;/span&gt;&lt;span class=&#34;nx&#34;&gt;SIGKILL&lt;/span&gt;&lt;span class=&#34;p&#34;&gt;,&lt;/span&gt;
+	&lt;span class=&#34;p&#34;&gt;},&lt;/span&gt;
+&lt;span class=&#34;p&#34;&gt;})&lt;/span&gt;
+&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;p&gt;根据 &lt;a href=&#34;https://man7.org/linux/man-pages/man2/ptrace.2.html&#34;&gt;ptrace(2)&lt;/a&gt; 的文档说明，在替换完程序入口指令后，子进程在返回用户态前会进入停止状态，即 &lt;code&gt;tracing stop&lt;/code&gt;。
+以下是命令 &lt;code&gt;retsnoop -e &#39;*_send_signal_locked*&#39; --comm exe -S&lt;/code&gt; 的输出示例。
+在执行 &lt;a href=&#34;https://elixir.bootlin.com/linux/v6.5/source/fs/exec.c#L1803&#34;&gt;exec_binrpm&lt;/a&gt; 时，会触发 PTRACE_EVENT_EXEC 事件，然后在 &lt;code&gt;exit_to_user_mode_loop&lt;/code&gt; 中处理掉该信号，使得进程主动进入 &lt;code&gt;ptrace_stop&lt;/code&gt; 状态。&lt;/p&gt;
+&lt;div class=&#34;highlight&#34;&gt;&lt;pre class=&#34;chroma&#34;&gt;&lt;code class=&#34;language-bash&#34; data-lang=&#34;bash&#34;&gt;07:42:51.340953 -&amp;gt; 07:42:51.340956 TID/PID 2854060/2854060 &lt;span class=&#34;o&#34;&gt;(&lt;/span&gt;exe/exe&lt;span class=&#34;o&#34;&gt;)&lt;/span&gt;:
+
+              entry_SYSCALL_64_after_hwframe+0x73
+              do_syscall_64+0x56
+              x64_sys_call+0x680
+              __x64_sys_execve+0x37
+              do_execveat_common.isra.0+0x198
+              bprm_execve+0x5e
+              bprm_execve.part.0+0x17b
+              exec_binprm+0x15a
+              send_sig+0x29
+              do_send_sig_info+0x63
+              send_signal_locked+0xdd
+!    2us &lt;span class=&#34;o&#34;&gt;[&lt;/span&gt;0&lt;span class=&#34;o&#34;&gt;]&lt;/span&gt;  __send_signal_locked
+
+
+07:42:51.341038 -&amp;gt; 07:42:51.341043 TID/PID 2854060/2854060 &lt;span class=&#34;o&#34;&gt;(&lt;/span&gt;exe/exe&lt;span class=&#34;o&#34;&gt;)&lt;/span&gt;:
+
+              entry_SYSCALL_64_after_hwframe+0x73
+              do_syscall_64+0x63
+              syscall_exit_to_user_mode+0x17
+              exit_to_user_mode_prepare+0xf4
+              exit_to_user_mode_loop+0xaa
+              arch_do_signal_or_restart+0x2a
+              get_signal+0x5c1
+              ptrace_signal+0x4e
+              ptrace_stop.part.0+0x246
+              do_notify_parent_cldstop+0x17d
+              send_signal_locked+0xdd
+!    4us &lt;span class=&#34;o&#34;&gt;[&lt;/span&gt;0&lt;span class=&#34;o&#34;&gt;]&lt;/span&gt;  __send_signal_locked
+&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;p&gt;这与之前使用 poll 进入睡眠状态的本质是一样的，因为子进程并不需要执行具体的任务。
+有了这种能力后，可以直接使用 re-exec，利用现成的二进制文件。所以在 os.StartProcess 中，第一个参数直接指定为 &lt;code&gt;/proc/self/exe&lt;/code&gt;。&lt;/p&gt;
+&lt;p&gt;os.StartProcess 通过配置一个带有 CLOEXEC 标志的匿名管道的写端来与子进程通信，该函数会在子进程进入 execve 系统调用的 &lt;a href=&#34;https://elixir.bootlin.com/linux/v6.5/source/fs/file.c#L818&#34;&gt;do_close_on_exec&lt;/a&gt; 阶段后才返回。
+也就是说，当 os.StartProcess 返回时，子进程已经运行在了新的 user_namespace 中。&lt;/p&gt;
+&lt;p&gt;相比之前的方法，os.StartProcess 需要执行 execve 系统调用，这意味着它会读取程序的内容并解析入口指令的位置。虽然这种方法在成本上略高，但依然在可以接受的范围内。&lt;/p&gt;
+&lt;div class=&#34;highlight&#34;&gt;&lt;pre class=&#34;chroma&#34;&gt;&lt;code class=&#34;language-bash&#34; data-lang=&#34;bash&#34;&gt;goos: linux
+goarch: amd64
+pkg: github.com/containerd/containerd/v2/core/mount
+cpu: AMD Ryzen &lt;span class=&#34;m&#34;&gt;7&lt;/span&gt; 5800H with Radeon Graphics
+                                    │ go122-golinkname │             go122-ptrace              │             go123-ptrace              │
+                                    │      sec/op      │    sec/op     vs base                 │    sec/op     vs base                 │
+BatchRunGetUsernsFD_Concurrent1-16        533.3µ ± ∞ ¹   739.6µ ± ∞ ¹        ~ &lt;span class=&#34;o&#34;&gt;(&lt;/span&gt;&lt;span class=&#34;nv&#34;&gt;p&lt;/span&gt;&lt;span class=&#34;o&#34;&gt;=&lt;/span&gt;1.000 &lt;span class=&#34;nv&#34;&gt;n&lt;/span&gt;&lt;span class=&#34;o&#34;&gt;=&lt;/span&gt;1&lt;span class=&#34;o&#34;&gt;)&lt;/span&gt; ²   723.3µ ± ∞ ¹        ~ &lt;span class=&#34;o&#34;&gt;(&lt;/span&gt;&lt;span class=&#34;nv&#34;&gt;p&lt;/span&gt;&lt;span class=&#34;o&#34;&gt;=&lt;/span&gt;1.000 &lt;span class=&#34;nv&#34;&gt;n&lt;/span&gt;&lt;span class=&#34;o&#34;&gt;=&lt;/span&gt;1&lt;span class=&#34;o&#34;&gt;)&lt;/span&gt; ²
+BatchRunGetUsernsFD_Concurrent10-16       3.662m ± ∞ ¹   4.024m ± ∞ ¹        ~ &lt;span class=&#34;o&#34;&gt;(&lt;/span&gt;&lt;span class=&#34;nv&#34;&gt;p&lt;/span&gt;&lt;span class=&#34;o&#34;&gt;=&lt;/span&gt;1.000 &lt;span class=&#34;nv&#34;&gt;n&lt;/span&gt;&lt;span class=&#34;o&#34;&gt;=&lt;/span&gt;1&lt;span class=&#34;o&#34;&gt;)&lt;/span&gt; ²   3.957m ± ∞ ¹        ~ &lt;span class=&#34;o&#34;&gt;(&lt;/span&gt;&lt;span class=&#34;nv&#34;&gt;p&lt;/span&gt;&lt;span class=&#34;o&#34;&gt;=&lt;/span&gt;1.000 &lt;span class=&#34;nv&#34;&gt;n&lt;/span&gt;&lt;span class=&#34;o&#34;&gt;=&lt;/span&gt;1&lt;span class=&#34;o&#34;&gt;)&lt;/span&gt; ²
+geomean                                   1.397m         1.725m        +23.45%                   1.692m        +21.06%
+¹ need &amp;gt;&lt;span class=&#34;o&#34;&gt;=&lt;/span&gt; &lt;span class=&#34;m&#34;&gt;6&lt;/span&gt; samples &lt;span class=&#34;k&#34;&gt;for&lt;/span&gt; confidence interval at level 0.95
+² need &amp;gt;&lt;span class=&#34;o&#34;&gt;=&lt;/span&gt; &lt;span class=&#34;m&#34;&gt;4&lt;/span&gt; samples to detect a difference at alpha level 0.05
+
+                                    │ go122-golinkname │              go122-ptrace               │              go123-ptrace               │
+                                    │       B/op       │     B/op       vs base                  │     B/op       vs base                  │
+BatchRunGetUsernsFD_Concurrent1-16       1.118Ki ± ∞ ¹   3.855Ki ± ∞ ¹         ~ &lt;span class=&#34;o&#34;&gt;(&lt;/span&gt;&lt;span class=&#34;nv&#34;&gt;p&lt;/span&gt;&lt;span class=&#34;o&#34;&gt;=&lt;/span&gt;1.000 &lt;span class=&#34;nv&#34;&gt;n&lt;/span&gt;&lt;span class=&#34;o&#34;&gt;=&lt;/span&gt;1&lt;span class=&#34;o&#34;&gt;)&lt;/span&gt; ²   4.121Ki ± ∞ ¹         ~ &lt;span class=&#34;o&#34;&gt;(&lt;/span&gt;&lt;span class=&#34;nv&#34;&gt;p&lt;/span&gt;&lt;span class=&#34;o&#34;&gt;=&lt;/span&gt;1.000 &lt;span class=&#34;nv&#34;&gt;n&lt;/span&gt;&lt;span class=&#34;o&#34;&gt;=&lt;/span&gt;1&lt;span class=&#34;o&#34;&gt;)&lt;/span&gt; ²
+BatchRunGetUsernsFD_Concurrent10-16      11.29Ki ± ∞ ¹   38.67Ki ± ∞ ¹         ~ &lt;span class=&#34;o&#34;&gt;(&lt;/span&gt;&lt;span class=&#34;nv&#34;&gt;p&lt;/span&gt;&lt;span class=&#34;o&#34;&gt;=&lt;/span&gt;1.000 &lt;span class=&#34;nv&#34;&gt;n&lt;/span&gt;&lt;span class=&#34;o&#34;&gt;=&lt;/span&gt;1&lt;span class=&#34;o&#34;&gt;)&lt;/span&gt; ²   41.36Ki ± ∞ ¹         ~ &lt;span class=&#34;o&#34;&gt;(&lt;/span&gt;&lt;span class=&#34;nv&#34;&gt;p&lt;/span&gt;&lt;span class=&#34;o&#34;&gt;=&lt;/span&gt;1.000 &lt;span class=&#34;nv&#34;&gt;n&lt;/span&gt;&lt;span class=&#34;o&#34;&gt;=&lt;/span&gt;1&lt;span class=&#34;o&#34;&gt;)&lt;/span&gt; ²
+geomean                                  3.553Ki         12.21Ki        +243.65%                   13.06Ki        +267.43%
+¹ need &amp;gt;&lt;span class=&#34;o&#34;&gt;=&lt;/span&gt; &lt;span class=&#34;m&#34;&gt;6&lt;/span&gt; samples &lt;span class=&#34;k&#34;&gt;for&lt;/span&gt; confidence interval at level 0.95
+² need &amp;gt;&lt;span class=&#34;o&#34;&gt;=&lt;/span&gt; &lt;span class=&#34;m&#34;&gt;4&lt;/span&gt; samples to detect a difference at alpha level 0.05
+
+                                    │ go122-golinkname │             go122-ptrace             │             go123-ptrace             │
+                                    │    allocs/op     │  allocs/op   vs base                 │  allocs/op   vs base                 │
+BatchRunGetUsernsFD_Concurrent1-16         43.00 ± ∞ ¹   68.00 ± ∞ ¹        ~ &lt;span class=&#34;o&#34;&gt;(&lt;/span&gt;&lt;span class=&#34;nv&#34;&gt;p&lt;/span&gt;&lt;span class=&#34;o&#34;&gt;=&lt;/span&gt;1.000 &lt;span class=&#34;nv&#34;&gt;n&lt;/span&gt;&lt;span class=&#34;o&#34;&gt;=&lt;/span&gt;1&lt;span class=&#34;o&#34;&gt;)&lt;/span&gt; ²   69.00 ± ∞ ¹        ~ &lt;span class=&#34;o&#34;&gt;(&lt;/span&gt;&lt;span class=&#34;nv&#34;&gt;p&lt;/span&gt;&lt;span class=&#34;o&#34;&gt;=&lt;/span&gt;1.000 &lt;span class=&#34;nv&#34;&gt;n&lt;/span&gt;&lt;span class=&#34;o&#34;&gt;=&lt;/span&gt;1&lt;span class=&#34;o&#34;&gt;)&lt;/span&gt; ²
+BatchRunGetUsernsFD_Concurrent10-16        421.0 ± ∞ ¹   671.0 ± ∞ ¹        ~ &lt;span class=&#34;o&#34;&gt;(&lt;/span&gt;&lt;span class=&#34;nv&#34;&gt;p&lt;/span&gt;&lt;span class=&#34;o&#34;&gt;=&lt;/span&gt;1.000 &lt;span class=&#34;nv&#34;&gt;n&lt;/span&gt;&lt;span class=&#34;o&#34;&gt;=&lt;/span&gt;1&lt;span class=&#34;o&#34;&gt;)&lt;/span&gt; ²   682.0 ± ∞ ¹        ~ &lt;span class=&#34;o&#34;&gt;(&lt;/span&gt;&lt;span class=&#34;nv&#34;&gt;p&lt;/span&gt;&lt;span class=&#34;o&#34;&gt;=&lt;/span&gt;1.000 &lt;span class=&#34;nv&#34;&gt;n&lt;/span&gt;&lt;span class=&#34;o&#34;&gt;=&lt;/span&gt;1&lt;span class=&#34;o&#34;&gt;)&lt;/span&gt; ²
+geomean                                    134.5         213.6        +58.76%                   216.9        +61.23%
+¹ need &amp;gt;&lt;span class=&#34;o&#34;&gt;=&lt;/span&gt; &lt;span class=&#34;m&#34;&gt;6&lt;/span&gt; samples &lt;span class=&#34;k&#34;&gt;for&lt;/span&gt; confidence interval at level 0.95
+² need &amp;gt;&lt;span class=&#34;o&#34;&gt;=&lt;/span&gt; &lt;span class=&#34;m&#34;&gt;4&lt;/span&gt; samples to detect a difference at alpha level 0.05
+&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;h3 id=&#34;最后&#34;&gt;最后&lt;/h3&gt;
+&lt;p&gt;在 &lt;a href=&#34;https://github.com/containerd/containerd/pull/10611&#34;&gt;core/mount: use ptrace instead of go:linkname&lt;/a&gt; 合并后，我第一时间给 GO 社区发起了退群请求 - &lt;a href=&#34;https://go-review.googlesource.com/c/go/+/609996&#34;&gt;609996: runtime: update comment for golinkname&lt;/a&gt;.&lt;/p&gt;
+</description>
+        </item>
         
         <item>
           <title>[CONT] Non-Preemptible RCU soft lockup: zap_pid_ns_processes</title>

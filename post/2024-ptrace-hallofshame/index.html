@@ -1,0 +1,235 @@
+<!DOCTYPE html>
+<html>
+    <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+    <title>
+        
+            Fu, Wei: 退群「Hall of shame」
+        
+    </title>
+
+    <meta property="og:title" content="退群「Hall of shame」"/>
+    <meta property="og:Section" content="website"/>
+    <meta property="og:url" content="https://fuweid.com/post/2024-ptrace-hallofshame/"/>
+    <meta property="og:image" content="https://fuweid.com/favicon.jpg"/>
+    <meta property="og:site_name" content="Fu, Wei"/>
+    <meta property="og:description" content=""/>
+
+    <link rel="stylesheet" href="/css/fontawesome/all.css" />
+    <link rel="stylesheet" href="/css/main.css" /> 
+    <link rel="stylesheet" href="/css/normalize.css">
+    <link rel="stylesheet" href="/css/prettify.css">
+    <link rel="shortcut icon" href="https://fuweid.com/favicon.jpg">
+    <link rel="icon" href="https://fuweid.com/favicon.jpg">
+    <script type="text/javascript" src="/js/prettify.js"></script>
+</head>
+
+
+    <body onload="doPrettify()">
+        <header>
+    <nav>
+        <ul class="home">
+            <li>
+                <a href="https://fuweid.com/">Fu, Wei</a>
+            </li>
+        </ul>
+        <ul class="social">
+            <li>
+                <a class="fab fa-github" href="https://github.com/fuweid" target="_blank"></a>
+            </li>
+            <li>
+                <a class="fab fa-twitter" href="https://twitter.com/fuweid89" target="_blank"></a>
+            </li>
+            <li>
+                <a class="fas fa-rss" href="https://fuweid.com//index.xml" target="_blank"></a>
+            </li>
+        </ul>
+    </nav>
+</header>
+
+
+        <div class="container">
+            <article class="single">
+                <h1 class="title"> 退群「Hall of shame」 </h1>
+                <h4 class="time"> September 3, 2024 </h4>
+                <p>在 GO 1.23 版本中，<a href="https://github.com/golang/go/issues/67401">GO Linker 将来会限制 <code>//go:linkname</code> 直接引用标准库中不可访问的对象</a>。
+看到这个消息后，我立刻用 GO 1.23.0 编译了 containerd，发现即使不加 <code>-checklinkname=0</code> 也能正常工作。
+之前为了支持 ID-mapped mount, 我在 containerd 项目里使用了 GO runtime 的隐藏功能，算是语言层面的灵活运用。
+现在可倒好，GO 团队直接在代码里把 containerd 列为 <a href="https://github.com/golang/go/blob/a9e6a96ac092cc5191d759488ee761e9a403ab8f/src/runtime/proc.go#L4848">Hall of shame</a> 成员。
+这种强行拉入群的形式实在无力吐槽，只能想想如何退群了。</p>
+<h3 id="为什么要使用-golinkname">为什么要使用 go:linkname</h3>
+<p>Kubernetes 社区之所以能落地 User Namespace 特性，是因为 Linux 社区在 2022 年引入了 <a href="https://lwn.net/Articles/896255/">ID-mapped mount</a> 的概念。
+原先，文件属性中的 UID 和 GID 是固定的，只有特定的用户或用户组才能访问相应的文件。
+容器镜像中的文件大多是由 root 用户创建的，如果要让非特权用户访问镜像中的所有内容，过去唯一的办法是使用 <code>chown -R</code> 来物理改变所有文件的 UID 和 GID。</p>
+<table>
+<thead>
+<tr>
+<th>Image</th>
+<th>Size</th>
+<th>Inodes</th>
+<th>overlayfs w/ metacopy</th>
+<th>overlayfs w/o metacopy</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>tensorflow/tensorflow:latest</td>
+<td>1489MiB</td>
+<td>32596</td>
+<td>1.29s</td>
+<td>54.80s</td>
+</tr>
+<tr>
+<td>library/node:latest</td>
+<td>1425MiB</td>
+<td>33385</td>
+<td>1.18s</td>
+<td>52.86s</td>
+</tr>
+<tr>
+<td>library/ubuntu:22.04</td>
+<td>83.4MiB</td>
+<td>3517</td>
+<td>0.15s</td>
+<td>5.32s</td>
+</tr>
+</tbody>
+</table>
+<p>现在有了 ID-mapped mount 的功能后，原本只有 UID=0/GID=0 用户可以访问的目录，只需几次系统调用就可以让 UID=1001/GID=1001 的用户访问。
+ID-mapped mount 在内核层面实现 ID 映射，比传统的 <code>chown -R</code> 方法在性能和效率上都有显著提升。</p>
+<p><img src="/img/2023-containerd-17-userns/mount-idmapped-bind.png" alt="mount-idmapped-bind"></p>
+<blockquote>
+<p>NOTE: 具体细节可以查看之前的文章 - <a href="https://fuweid.com/post/2023-containerd-17-userns/">containerd 1.7: UserNamespace Stateless Pod</a></p>
+</blockquote>
+<p>不过，ID-mapped mount 需要提供 <a href="https://man7.org/linux/man-pages/man7/user_namespaces.7.html">user_namespace(7)</a> 的句柄信息，而这种信息只能通过创建新进程（使用 CLONE_USER）来获取（/proc/$PID/ns/user 句柄）。
+由于 GO 对多进程编程的支持有限，标准库中只有 <a href="https://pkg.go.dev/os#StartProcess">os.StartProcess</a> 接口，而它采用了 fork 和 execve 组合的方式。
+换句话说，多进程的 官方 方法只能通过调用命令行来实现，这要求开发者为每个进程逻辑准备一个独立的二进制文件。
+为了简化运维，常见的做法是将每个独立逻辑封装成子命令，并通过调用自身的 <code>/proc/self/exe</code> 来完成，这种方法被称为 <code>re-exec</code>。</p>
+<p>然而，这种方法的成本太高。相当于每个引用了 ID-mapped mount 功能的程序都需要一个专门的命令行来创建新的 user_namespace。
+因此，在 containerd 的 <a href="https://github.com/containerd/containerd/blob/27de5fea738a38345aa1ac7569032261a6b1e562/pkg/sys/userns_unsafe_linux.go#L38">GetUsernsFD</a> 中，模拟了 os.StartProcess 的 fork 流程，并将最后的 execve 替换为 <code>syscall.RawSyscall(syscall.SYS_PPOLL, 0, 0, 0)</code>，使子进程进入无限期的睡眠状态。
+这样，父进程 containerd 在 fork 返回时，子进程已经运行在新的 user_namespace 中，父进程可以安全地获取子进程的 user_namespace 句柄，而无需担心进程间的保活问题。</p>
+<p>在整个 fork 过程中，子进程处于单线程模式，不具有完整的 GO runtime 逻辑。因此，需要使用 GO runtime 中的三个隐藏功能来屏蔽信号处理，并防止父子进程间发生栈大小的变化。这些隐藏功能只能通过 <code>//go:linkname</code> 指令来激活。
+在我看来，这本属于灵活使用，本身 GO 标准库都是这么玩的 :)。</p>
+<div class="highlight"><pre class="chroma"><code class="language-go" data-lang="go"><span class="c1">//go:linkname beforeFork syscall.runtime_BeforeFork
+</span><span class="c1"></span><span class="kd">func</span> <span class="nf">beforeFork</span><span class="p">()</span>
+
+<span class="c1">//go:linkname afterFork syscall.runtime_AfterFork
+</span><span class="c1"></span><span class="kd">func</span> <span class="nf">afterFork</span><span class="p">()</span>
+
+<span class="c1">//go:linkname afterForkInChild syscall.runtime_AfterForkInChild
+</span><span class="c1"></span><span class="kd">func</span> <span class="nf">afterForkInChild</span><span class="p">()</span>
+</code></pre></div><blockquote>
+<p>当然，子进程也只能使用 RawSyscall 来完成初始化工作。这是为了避免进入不应该进入的流程，例如释放当前的执行线程。</p>
+</blockquote>
+<h3 id="替换方案-ptrace">替换方案 ptrace</h3>
+<p>我并不想为了 fork 而引入一个子命令，所以给的选择也就只有 ptrace，如下面的代码所示。</p>
+<div class="highlight"><pre class="chroma"><code class="language-go" data-lang="go"><span class="nx">os</span><span class="p">.</span><span class="nf">StartProcess</span><span class="p">(</span><span class="s">&#34;/proc/self/exe&#34;</span><span class="p">,</span> <span class="p">[]</span><span class="kt">string</span><span class="p">{</span><span class="s">&#34;containerd[getUsernsFD]&#34;</span><span class="p">},</span> <span class="o">&amp;</span><span class="nx">os</span><span class="p">.</span><span class="nx">ProcAttr</span><span class="p">{</span>
+	<span class="nx">Sys</span><span class="p">:</span> <span class="o">&amp;</span><span class="nx">syscall</span><span class="p">.</span><span class="nx">SysProcAttr</span><span class="p">{</span>
+		<span class="nx">Cloneflags</span><span class="p">:</span>  <span class="nx">unix</span><span class="p">.</span><span class="nx">CLONE_NEWUSER</span><span class="p">,</span>
+		<span class="nx">UidMappings</span><span class="p">:</span> <span class="nx">uidMaps</span><span class="p">,</span>
+		<span class="nx">GidMappings</span><span class="p">:</span> <span class="nx">gidMaps</span><span class="p">,</span>
+		<span class="c1">// NOTE: It&#39;s reexec but it&#39;s not heavy because subprocess
+</span><span class="c1"></span>		<span class="c1">// be in PTRACE_TRACEME mode before performing execve.
+</span><span class="c1"></span>		<span class="nx">Ptrace</span><span class="p">:</span>    <span class="kc">true</span><span class="p">,</span>
+		<span class="nx">Pdeathsig</span><span class="p">:</span> <span class="nx">syscall</span><span class="p">.</span><span class="nx">SIGKILL</span><span class="p">,</span>
+	<span class="p">},</span>
+<span class="p">})</span>
+</code></pre></div><p>根据 <a href="https://man7.org/linux/man-pages/man2/ptrace.2.html">ptrace(2)</a> 的文档说明，在替换完程序入口指令后，子进程在返回用户态前会进入停止状态，即 <code>tracing stop</code>。
+以下是命令 <code>retsnoop -e '*_send_signal_locked*' --comm exe -S</code> 的输出示例。
+在执行 <a href="https://elixir.bootlin.com/linux/v6.5/source/fs/exec.c#L1803">exec_binrpm</a> 时，会触发 PTRACE_EVENT_EXEC 事件，然后在 <code>exit_to_user_mode_loop</code> 中处理掉该信号，使得进程主动进入 <code>ptrace_stop</code> 状态。</p>
+<div class="highlight"><pre class="chroma"><code class="language-bash" data-lang="bash">07:42:51.340953 -&gt; 07:42:51.340956 TID/PID 2854060/2854060 <span class="o">(</span>exe/exe<span class="o">)</span>:
+
+              entry_SYSCALL_64_after_hwframe+0x73
+              do_syscall_64+0x56
+              x64_sys_call+0x680
+              __x64_sys_execve+0x37
+              do_execveat_common.isra.0+0x198
+              bprm_execve+0x5e
+              bprm_execve.part.0+0x17b
+              exec_binprm+0x15a
+              send_sig+0x29
+              do_send_sig_info+0x63
+              send_signal_locked+0xdd
+!    2us <span class="o">[</span>0<span class="o">]</span>  __send_signal_locked
+
+
+07:42:51.341038 -&gt; 07:42:51.341043 TID/PID 2854060/2854060 <span class="o">(</span>exe/exe<span class="o">)</span>:
+
+              entry_SYSCALL_64_after_hwframe+0x73
+              do_syscall_64+0x63
+              syscall_exit_to_user_mode+0x17
+              exit_to_user_mode_prepare+0xf4
+              exit_to_user_mode_loop+0xaa
+              arch_do_signal_or_restart+0x2a
+              get_signal+0x5c1
+              ptrace_signal+0x4e
+              ptrace_stop.part.0+0x246
+              do_notify_parent_cldstop+0x17d
+              send_signal_locked+0xdd
+!    4us <span class="o">[</span>0<span class="o">]</span>  __send_signal_locked
+</code></pre></div><p>这与之前使用 poll 进入睡眠状态的本质是一样的，因为子进程并不需要执行具体的任务。
+有了这种能力后，可以直接使用 re-exec，利用现成的二进制文件。所以在 os.StartProcess 中，第一个参数直接指定为 <code>/proc/self/exe</code>。</p>
+<p>os.StartProcess 通过配置一个带有 CLOEXEC 标志的匿名管道的写端来与子进程通信，该函数会在子进程进入 execve 系统调用的 <a href="https://elixir.bootlin.com/linux/v6.5/source/fs/file.c#L818">do_close_on_exec</a> 阶段后才返回。
+也就是说，当 os.StartProcess 返回时，子进程已经运行在了新的 user_namespace 中。</p>
+<p>相比之前的方法，os.StartProcess 需要执行 execve 系统调用，这意味着它会读取程序的内容并解析入口指令的位置。虽然这种方法在成本上略高，但依然在可以接受的范围内。</p>
+<div class="highlight"><pre class="chroma"><code class="language-bash" data-lang="bash">goos: linux
+goarch: amd64
+pkg: github.com/containerd/containerd/v2/core/mount
+cpu: AMD Ryzen <span class="m">7</span> 5800H with Radeon Graphics
+                                    │ go122-golinkname │             go122-ptrace              │             go123-ptrace              │
+                                    │      sec/op      │    sec/op     vs base                 │    sec/op     vs base                 │
+BatchRunGetUsernsFD_Concurrent1-16        533.3µ ± ∞ ¹   739.6µ ± ∞ ¹        ~ <span class="o">(</span><span class="nv">p</span><span class="o">=</span>1.000 <span class="nv">n</span><span class="o">=</span>1<span class="o">)</span> ²   723.3µ ± ∞ ¹        ~ <span class="o">(</span><span class="nv">p</span><span class="o">=</span>1.000 <span class="nv">n</span><span class="o">=</span>1<span class="o">)</span> ²
+BatchRunGetUsernsFD_Concurrent10-16       3.662m ± ∞ ¹   4.024m ± ∞ ¹        ~ <span class="o">(</span><span class="nv">p</span><span class="o">=</span>1.000 <span class="nv">n</span><span class="o">=</span>1<span class="o">)</span> ²   3.957m ± ∞ ¹        ~ <span class="o">(</span><span class="nv">p</span><span class="o">=</span>1.000 <span class="nv">n</span><span class="o">=</span>1<span class="o">)</span> ²
+geomean                                   1.397m         1.725m        +23.45%                   1.692m        +21.06%
+¹ need &gt;<span class="o">=</span> <span class="m">6</span> samples <span class="k">for</span> confidence interval at level 0.95
+² need &gt;<span class="o">=</span> <span class="m">4</span> samples to detect a difference at alpha level 0.05
+
+                                    │ go122-golinkname │              go122-ptrace               │              go123-ptrace               │
+                                    │       B/op       │     B/op       vs base                  │     B/op       vs base                  │
+BatchRunGetUsernsFD_Concurrent1-16       1.118Ki ± ∞ ¹   3.855Ki ± ∞ ¹         ~ <span class="o">(</span><span class="nv">p</span><span class="o">=</span>1.000 <span class="nv">n</span><span class="o">=</span>1<span class="o">)</span> ²   4.121Ki ± ∞ ¹         ~ <span class="o">(</span><span class="nv">p</span><span class="o">=</span>1.000 <span class="nv">n</span><span class="o">=</span>1<span class="o">)</span> ²
+BatchRunGetUsernsFD_Concurrent10-16      11.29Ki ± ∞ ¹   38.67Ki ± ∞ ¹         ~ <span class="o">(</span><span class="nv">p</span><span class="o">=</span>1.000 <span class="nv">n</span><span class="o">=</span>1<span class="o">)</span> ²   41.36Ki ± ∞ ¹         ~ <span class="o">(</span><span class="nv">p</span><span class="o">=</span>1.000 <span class="nv">n</span><span class="o">=</span>1<span class="o">)</span> ²
+geomean                                  3.553Ki         12.21Ki        +243.65%                   13.06Ki        +267.43%
+¹ need &gt;<span class="o">=</span> <span class="m">6</span> samples <span class="k">for</span> confidence interval at level 0.95
+² need &gt;<span class="o">=</span> <span class="m">4</span> samples to detect a difference at alpha level 0.05
+
+                                    │ go122-golinkname │             go122-ptrace             │             go123-ptrace             │
+                                    │    allocs/op     │  allocs/op   vs base                 │  allocs/op   vs base                 │
+BatchRunGetUsernsFD_Concurrent1-16         43.00 ± ∞ ¹   68.00 ± ∞ ¹        ~ <span class="o">(</span><span class="nv">p</span><span class="o">=</span>1.000 <span class="nv">n</span><span class="o">=</span>1<span class="o">)</span> ²   69.00 ± ∞ ¹        ~ <span class="o">(</span><span class="nv">p</span><span class="o">=</span>1.000 <span class="nv">n</span><span class="o">=</span>1<span class="o">)</span> ²
+BatchRunGetUsernsFD_Concurrent10-16        421.0 ± ∞ ¹   671.0 ± ∞ ¹        ~ <span class="o">(</span><span class="nv">p</span><span class="o">=</span>1.000 <span class="nv">n</span><span class="o">=</span>1<span class="o">)</span> ²   682.0 ± ∞ ¹        ~ <span class="o">(</span><span class="nv">p</span><span class="o">=</span>1.000 <span class="nv">n</span><span class="o">=</span>1<span class="o">)</span> ²
+geomean                                    134.5         213.6        +58.76%                   216.9        +61.23%
+¹ need &gt;<span class="o">=</span> <span class="m">6</span> samples <span class="k">for</span> confidence interval at level 0.95
+² need &gt;<span class="o">=</span> <span class="m">4</span> samples to detect a difference at alpha level 0.05
+</code></pre></div><h3 id="最后">最后</h3>
+<p>在 <a href="https://github.com/containerd/containerd/pull/10611">core/mount: use ptrace instead of go:linkname</a> 合并后，我第一时间给 GO 社区发起了退群请求 - <a href="https://go-review.googlesource.com/c/go/+/609996">609996: runtime: update comment for golinkname</a>.</p>
+
+            </article>
+        </div>
+
+        <footer>
+    &copy; 2024 Fu Wei
+</footer>
+
+<script>
+    function doPrettify(){
+        pres=document.getElementsByTagName('pre');
+        for (i=0; i < pres.length; i++) {
+            pres[i].className+=" prettyprint";
+        }
+        prettyPrint();
+    }
+</script>
+
+
+<script async src="https://www.googletagmanager.com/gtag/js?id=G-1C7VLVHN52"></script>
+<script>
+  window.dataLayer = window.dataLayer || [];
+  function gtag(){dataLayer.push(arguments);}
+  gtag('js', new Date());
+
+  gtag('config', 'G-1C7VLVHN52');
+</script>
+
+    </body>
+</html>
