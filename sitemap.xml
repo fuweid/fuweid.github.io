@@ -4,12 +4,17 @@
   
   <url>
     <loc>https://fuweid.com/</loc>
-    <lastmod>2024-09-03T07:47:45+08:00</lastmod>
+    <lastmod>2025-02-03T10:20:45-05:00</lastmod>
   </url>
   
   <url>
     <loc>https://fuweid.com/post/</loc>
-    <lastmod>2024-09-03T07:47:45+08:00</lastmod>
+    <lastmod>2025-02-03T10:20:45-05:00</lastmod>
+  </url>
+  
+  <url>
+    <loc>https://fuweid.com/post/2025-streaming-jsonpb-in-k8s/</loc>
+    <lastmod>2025-02-03T10:20:45-05:00</lastmod>
   </url>
   
   <url>
@@ -84,12 +89,12 @@
   
   <url>
     <loc>https://fuweid.com/post/2020-go-string-data-race/</loc>
-    <lastmod>2020-05-30T00:00:00+08:00</lastmod>
+    <lastmod>2020-05-30T00:00:00-04:00</lastmod>
   </url>
   
   <url>
     <loc>https://fuweid.com/post/2020-digital-book-from-safari/</loc>
-    <lastmod>2020-03-21T00:00:00+08:00</lastmod>
+    <lastmod>2020-03-21T00:00:00-04:00</lastmod>
   </url>
   
   <url>
@@ -104,7 +109,7 @@
   
   <url>
     <loc>https://fuweid.com/post/2018-goroutine-scheduler-overview/</loc>
-    <lastmod>2018-02-06T00:00:00+08:00</lastmod>
+    <lastmod>2018-02-06T00:00:00-05:00</lastmod>
   </url>
   
   <url>
@@ -119,17 +124,17 @@
   
   <url>
     <loc>https://fuweid.com/post/2017-control-your-shell-script/</loc>
-    <lastmod>2017-03-20T00:00:00+08:00</lastmod>
+    <lastmod>2017-03-20T00:00:00-04:00</lastmod>
   </url>
   
   <url>
     <loc>https://fuweid.com/post/2017-shebang-compatibility-version/</loc>
-    <lastmod>2017-03-19T00:00:00+08:00</lastmod>
+    <lastmod>2017-03-19T00:00:00-04:00</lastmod>
   </url>
   
   <url>
     <loc>https://fuweid.com/post/2017-netfilter-beginning/</loc>
-    <lastmod>2017-03-17T00:00:00+08:00</lastmod>
+    <lastmod>2017-03-17T00:00:00-04:00</lastmod>
   </url>
   
 </urlset>

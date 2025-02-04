@@ -5,7 +5,20 @@
     <link>https://fuweid.com/post/</link>
     <description>Recent content in Posts on Fu, Wei</description>
     <generator>Hugo -- gohugo.io</generator>
-    <lastBuildDate>Tue, 03 Sep 2024 07:47:45 +0800</lastBuildDate><atom:link href="https://fuweid.com/post/index.xml" rel="self" type="application/rss+xml" />
+    <lastBuildDate>Mon, 03 Feb 2025 10:20:45 -0500</lastBuildDate><atom:link href="https://fuweid.com/post/index.xml" rel="self" type="application/rss+xml" />
+    <item>
+      <title>Streaming JSON/Protobuf in Kubernetes</title>
+      <link>https://fuweid.com/post/2025-streaming-jsonpb-in-k8s/</link>
+      <pubDate>Mon, 03 Feb 2025 10:20:45 -0500</pubDate>
+      
+      <guid>https://fuweid.com/post/2025-streaming-jsonpb-in-k8s/</guid>
+      <description>OOM-KILL 当 kube-apiserver 处理 LIST 请求时，它会一次性将数据序列化为 JSON 或 Protobuf 格式，然后交由底层的 Go/http 处理。根据标准的 encoding/json 库实现，kube-apiserver 需要分配一大块内存来存放完整的序列化结果。更严重的是，这块内存要等到数据的最后一个字节被传输完毕后才会释放，容易导致高峰时的内存占用激增。
+在 Go/http2 实现中，每个 http2/stream 都有一个传输队列，队列中的成员存储需要发送的数据。多个 http2/stream 共享同一个 TCP 连接，为了保证公平性，Go 按顺序选择 http2/stream 并限制每次发送的数据量。由于每个 http2/stream 只有有限的发送窗口，数据会像“挤牙膏”一样逐步推送。然而，在 kube-apiserver 的实现中，每个 http2/stream 的传输队列通常只有一个成员指向序列化的数据，该成员会一直持有完整的序列化数据，直到传输完毕才释放。如果短时间内有多个大请求，kube-apiserver 会迅速消耗大量内存，甚至可能导致 OOM 崩溃。
+更揪心的是 encoding/json 的实现。虽然它内部使用了 sync.Pool 来提高内存复用率，但这也带来了一个隐患：如果先处理了少量的大请求，而后续主要是大量的小请求，那么 sync.Pool 可能会长期持有之前分配的大块内存，而这些内存无法及时释放。在这种情况下，kube-apiserver 的内存占用无法真实反映当前的请求负载，即使大请求已经结束，进程仍可能维持较高的内存使用率。&amp;ndash; Kubernetes#114276
+KEP-5116 解决这个问题的关键在于引入 流式处理 来序列化数据。KEP-5116 根据 LIST 响应的结构特点，可以依次序列化 TypeMeta、ListMeta，然后逐项序列化 Items，避免一次性分配和持有大块内存，从而降低内存占用。
+type XYZList struct { metav1.TypeMeta `json:&amp;#34;,inline&amp;#34;` // Standard list metadata.  // More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds  // +optional  metav1.</description>
+    </item>
+    
     <item>
       <title>退群「Hall of shame」</title>
       <link>https://fuweid.com/post/2024-ptrace-hallofshame/</link>
@@ -186,7 +199,7 @@ sync.Mutex 结构设计分析 Mutex 也被称之为锁。
     <item>
       <title>可以同时对一个 go string 进行读写操作吗？</title>
       <link>https://fuweid.com/post/2020-go-string-data-race/</link>
-      <pubDate>Sat, 30 May 2020 00:00:00 +0800</pubDate>
+      <pubDate>Sat, 30 May 2020 00:00:00 -0400</pubDate>
       
       <guid>https://fuweid.com/post/2020-go-string-data-race/</guid>
       <description>写过 Go 代码的同学都知道，在程序内启动多个 goroutine 处理任务是很常见的事情， 启动一个 goroutine 要比启动一个线程简单的多。当多个 goroutine 同时处理同一份数据时， 我们应该在代码中加入同步机制，保证多个 goroutine 按照一定顺序来访问数据， 不然就会出现 data race。 最常见的例子如下，同时写操作 map 数据会导致程序 panic，即使操作的是不同 key：
@@ -197,7 +210,7 @@ sync.Mutex 结构设计分析 Mutex 也被称之为锁。
     <item>
       <title>在线看 O&#39;Reilly 动物新书指南</title>
       <link>https://fuweid.com/post/2020-digital-book-from-safari/</link>
-      <pubDate>Sat, 21 Mar 2020 00:00:00 +0800</pubDate>
+      <pubDate>Sat, 21 Mar 2020 00:00:00 -0400</pubDate>
       
       <guid>https://fuweid.com/post/2020-digital-book-from-safari/</guid>
       <description>想当初，为了看 Operating Systems: Three Easy Pieces 和 A Philosophy of Software Design 原版技术书，还特别麻烦了朋友从国外人肉带回来，成本极高。 但如果等国内出版社引进，就会出现时间跨度太大没法尝鲜；加上翻译水平参差不齐，等待中文版的路子基本上行不通。 为了解决这个尴尬问题，最近找到了一个比较实惠看国外原版书籍的方式：ACM Professional Membership。
@@ -258,7 +271,7 @@ Gopher 语言切换算是这三年里最大的变化吧。为了看 Docker 的�
     <item>
       <title>Goroutine Scheduler Overview</title>
       <link>https://fuweid.com/post/2018-goroutine-scheduler-overview/</link>
-      <pubDate>Tue, 06 Feb 2018 00:00:00 +0800</pubDate>
+      <pubDate>Tue, 06 Feb 2018 00:00:00 -0500</pubDate>
       
       <guid>https://fuweid.com/post/2018-goroutine-scheduler-overview/</guid>
       <description>Goroutine 是 Golang 世界里的 Lightweight Thread 。
@@ -299,7 +312,7 @@ package main type Ducker interface { Quack() } type Duck struct {} func (_ Duck)
     <item>
       <title>让你的 shell 脚本变得可控</title>
       <link>https://fuweid.com/post/2017-control-your-shell-script/</link>
-      <pubDate>Mon, 20 Mar 2017 00:00:00 +0800</pubDate>
+      <pubDate>Mon, 20 Mar 2017 00:00:00 -0400</pubDate>
       
       <guid>https://fuweid.com/post/2017-control-your-shell-script/</guid>
       <description>刚开始接触 shell 脚本的时候，最痛苦的地方在于出了问题，却不容易定位问题。
@@ -314,7 +327,7 @@ set -e 默认情况下，shell 脚本遇到错误并不会立即退出，它还�
     <item>
       <title>shebang - #!</title>
       <link>https://fuweid.com/post/2017-shebang-compatibility-version/</link>
-      <pubDate>Sun, 19 Mar 2017 00:00:00 +0800</pubDate>
+      <pubDate>Sun, 19 Mar 2017 00:00:00 -0400</pubDate>
       
       <guid>https://fuweid.com/post/2017-shebang-compatibility-version/</guid>
       <description>写脚本的时候通常会在脚本的开头加上 shebang, 系统会将这段内容作为解释器指令，比如 bash shell 脚本。
@@ -326,7 +339,7 @@ $&amp;gt; cat exmaple #!/usr/bin/env bash echo &amp;#34;HaHa&amp;#34; env 会在
     <item>
       <title>Netfilter 初探</title>
       <link>https://fuweid.com/post/2017-netfilter-beginning/</link>
-      <pubDate>Fri, 17 Mar 2017 00:00:00 +0800</pubDate>
+      <pubDate>Fri, 17 Mar 2017 00:00:00 -0400</pubDate>
       
       <guid>https://fuweid.com/post/2017-netfilter-beginning/</guid>
       <description>Linux 内核在 2.4.x 版本中正式引入 Netfilter 模块，该模块负责网络数据包过滤和 Network Address Translation。 Netfilter 代表着一系列的 Hook ，被内核嵌入到 TCP/IP 协议栈中，数据包在穿梭协议栈时，Hook 会检查数据包，从而达到访问控制的作用。

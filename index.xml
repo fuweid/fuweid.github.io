@@ -2,10 +2,56 @@
     <channel>
         <title>Fu, Wei</title>
         <link>https://fuweid.com/</link>
-        <copyright>2024 Wei Fu</copyright>
-        <lastBuildDate>Tue, 03 Sep 2024 07:47:45 +0800</lastBuildDate>
+        <copyright>2025 Wei Fu</copyright>
+        <lastBuildDate>Mon, 03 Feb 2025 10:20:45 -0500</lastBuildDate>
         <atom:link href="/" rel="self" type="application/rss+xml" />
 
+        
+        <item>
+          <title>Streaming JSON/Protobuf in Kubernetes</title>
+          <link>/post/2025-streaming-jsonpb-in-k8s/</link>
+          <pubDate>Mon, 03 Feb 2025 10:20:45 -0500</pubDate>
+          <guid>https://fuweid.com/post/2025-streaming-jsonpb-in-k8s/</guid>
+          <description>&lt;h3 id=&#34;oom-kill&#34;&gt;OOM-KILL&lt;/h3&gt;
+&lt;p&gt;当 kube-apiserver 处理 LIST 请求时，它会一次性将数据序列化为 JSON 或 Protobuf 格式，然后交由底层的 Go/http 处理。根据标准的 &lt;a href=&#34;https://github.com/golang/go/blob/b07b20fbb591ac77158e1089299ce5acad71ffde/src/encoding/json/stream.go#L202-L235&#34;&gt;encoding/json&lt;/a&gt; 库实现，kube-apiserver 需要分配一大块内存来存放完整的序列化结果。更严重的是，这块内存要等到数据的最后一个字节被传输完毕后才会释放，容易导致高峰时的内存占用激增。&lt;/p&gt;
+&lt;p&gt;在 Go/http2 实现中，每个 http2/stream 都有一个传输队列，队列中的成员存储需要发送的数据。多个 http2/stream 共享同一个 TCP 连接，为了保证公平性，Go 按顺序选择 http2/stream 并限制每次发送的数据量。由于每个 http2/stream 只有有限的发送窗口，数据会像“挤牙膏”一样逐步推送。然而，在 kube-apiserver 的实现中，每个 http2/stream 的传输队列通常只有一个成员指向序列化的数据，该成员会一直持有完整的序列化数据，直到传输完毕才释放。如果短时间内有多个大请求，kube-apiserver 会迅速消耗大量内存，甚至可能导致 OOM 崩溃。&lt;/p&gt;
+&lt;p&gt;&lt;img src=&#34;https://fuweid.com/img/2025-streaming-jsonpb-in-k8s/http2-stream-writedata.png&#34; alt=&#34;http2-stream-writedata&#34;&gt;&lt;/p&gt;
+&lt;p&gt;更揪心的是 encoding/json 的实现。虽然它内部使用了 sync.Pool 来提高内存复用率，但这也带来了一个隐患：如果先处理了少量的大请求，而后续主要是大量的小请求，那么 sync.Pool 可能会长期持有之前分配的大块内存，而这些内存无法及时释放。在这种情况下，kube-apiserver 的内存占用无法真实反映当前的请求负载，即使大请求已经结束，进程仍可能维持较高的内存使用率。&amp;ndash; &lt;a href=&#34;https://github.com/kubernetes/kubernetes/issues/114276&#34;&gt;Kubernetes#114276&lt;/a&gt;&lt;/p&gt;
+&lt;h3 id=&#34;kep-5116&#34;&gt;KEP-5116&lt;/h3&gt;
+&lt;p&gt;解决这个问题的关键在于引入 &lt;strong&gt;流式处理&lt;/strong&gt; 来序列化数据。&lt;a href=&#34;https://github.com/kubernetes/enhancements/issues/5116&#34;&gt;KEP-5116&lt;/a&gt; 根据 LIST 响应的结构特点，可以依次序列化 TypeMeta、ListMeta，然后逐项序列化 Items，避免一次性分配和持有大块内存，从而降低内存占用。&lt;/p&gt;
+&lt;div class=&#34;highlight&#34;&gt;&lt;pre class=&#34;chroma&#34;&gt;&lt;code class=&#34;language-go&#34; data-lang=&#34;go&#34;&gt;&lt;span class=&#34;kd&#34;&gt;type&lt;/span&gt; &lt;span class=&#34;nx&#34;&gt;XYZList&lt;/span&gt; &lt;span class=&#34;kd&#34;&gt;struct&lt;/span&gt; &lt;span class=&#34;p&#34;&gt;{&lt;/span&gt;
+        &lt;span class=&#34;nx&#34;&gt;metav1&lt;/span&gt;&lt;span class=&#34;p&#34;&gt;.&lt;/span&gt;&lt;span class=&#34;nx&#34;&gt;TypeMeta&lt;/span&gt; &lt;span class=&#34;s&#34;&gt;`json:&amp;#34;,inline&amp;#34;`&lt;/span&gt;
+        &lt;span class=&#34;c1&#34;&gt;// Standard list metadata.
+&lt;/span&gt;&lt;span class=&#34;c1&#34;&gt;&lt;/span&gt;        &lt;span class=&#34;c1&#34;&gt;// More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+&lt;/span&gt;&lt;span class=&#34;c1&#34;&gt;&lt;/span&gt;        &lt;span class=&#34;c1&#34;&gt;// +optional
+&lt;/span&gt;&lt;span class=&#34;c1&#34;&gt;&lt;/span&gt;        &lt;span class=&#34;nx&#34;&gt;metav1&lt;/span&gt;&lt;span class=&#34;p&#34;&gt;.&lt;/span&gt;&lt;span class=&#34;nx&#34;&gt;ListMeta&lt;/span&gt; &lt;span class=&#34;s&#34;&gt;`json:&amp;#34;metadata,omitempty&amp;#34; protobuf:&amp;#34;bytes,1,opt,name=metadata&amp;#34;`&lt;/span&gt;
+
+        &lt;span class=&#34;c1&#34;&gt;// List of XYZ.
+&lt;/span&gt;&lt;span class=&#34;c1&#34;&gt;&lt;/span&gt;        &lt;span class=&#34;c1&#34;&gt;// More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md
+&lt;/span&gt;&lt;span class=&#34;c1&#34;&gt;&lt;/span&gt;        &lt;span class=&#34;nx&#34;&gt;Items&lt;/span&gt; &lt;span class=&#34;p&#34;&gt;[]&lt;/span&gt;&lt;span class=&#34;nx&#34;&gt;XYZ&lt;/span&gt; &lt;span class=&#34;s&#34;&gt;`json:&amp;#34;items&amp;#34; protobuf:&amp;#34;bytes,2,rep,name=items&amp;#34;`&lt;/span&gt;
+&lt;span class=&#34;p&#34;&gt;}&lt;/span&gt;
+&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;p&gt;这样不仅解决了 encoding/json 大内存回收的问题，还解决了 Go/http2 的内存管理问题。
+在流式处理的模式下，http2 stream 的队列成员数量会增加，但每个成员最多只会引用 1-2 MiB 的内存，并在发送完毕后及时释放。
+此外，根据 Go/http2 的实现，当网络较为繁忙时，kube-apiserver 无法无限制地向 http2/stream 队列中添加待发送的数据成员，从而在一定程度上抑制了内存的过快增长，进一步提升了系统的稳定性。&lt;/p&gt;
+&lt;p&gt;&lt;img src=&#34;https://fuweid.com/img/2025-streaming-jsonpb-in-k8s/http2-stream-writedata2.png&#34; alt=&#34;http2-stream-writedata-2&#34;&gt;&lt;/p&gt;
+&lt;h3 id=&#34;benchmark&#34;&gt;Benchmark&lt;/h3&gt;
+&lt;p&gt;实验准备:&lt;/p&gt;
+&lt;ul&gt;
+&lt;li&gt;1024 个 configmap，每个 configmap 大小为 1 MiB&lt;/li&gt;
+&lt;li&gt;每个请求数据量为 100 MiB, 数据格式为 JSON，请求不经过 ETCD&lt;/li&gt;
+&lt;li&gt;每秒最多发出 10 个请求，客户端最多并发处理 100 个请求&lt;/li&gt;
+&lt;li&gt;一共发出 6000 个请求&lt;/li&gt;
+&lt;/ul&gt;
+&lt;p&gt;下图左侧的为 kube-apiserver v1.32.0 版本，它最高消耗了将近 29 GiB; 而采用了 &lt;a href=&#34;https://github.com/kubernetes/kubernetes/pull/129334&#34;&gt;Kubernetes#129334&lt;/a&gt; 的版本仅仅需要 2-3 GiB，内存占用大幅降低。
+这个优化方案比 &lt;a href=&#34;https://github.com/kubernetes/enhancements/blob/master/keps/sig-api-machinery/3157-watch-list/README.md&#34;&gt;WatchList&lt;/a&gt; 实用性更强，客户端不需要做任何改造。可惜这么好的优化，上游不愿意 backport 到老版本上。&lt;/p&gt;
+&lt;p&gt;&lt;img src=&#34;https://fuweid.com/img/2025-streaming-jsonpb-in-k8s/benchmark.png&#34; alt=&#34;benchmark-result&#34;&gt;&lt;/p&gt;
+&lt;h3 id=&#34;65k-nodes&#34;&gt;65K Nodes?&lt;/h3&gt;
+&lt;p&gt;Kubernetes 在近几个版本的优化都挺给力的，比如 &lt;a href=&#34;https://github.com/kubernetes/enhancements/blob/master/keps/sig-api-machinery/2340-Consistent-reads-from-cache/README.md&#34;&gt;v1.31 ConsistentListFromCache&lt;/a&gt; 可以很大程度避免击穿背后的 ETCD，再配合上基于缓存的分页能力，ETCD 仅需要做好数据推送的任务就好了。最后再配合上 KEP-5116，65K 节点不是梦啊 :)&lt;/p&gt;
+&lt;blockquote&gt;
+&lt;p&gt;NOTE: 这个问题同样存在于 gRPC-go 的 UnaryCall 方式中。除非服务端一开始就采用 gRPC-go StreamCall 进行流式传输，否则在处理大规模数据时，仍然可能触发 OOM-KILL。ETCD 也面临类似的挑战，但 Kubernetes 目前的优化策略更倾向于让 ETCD 专注于数据推送，而由 kube-apiserver 承担数据处理的压力。从这个角度来看，Kubernetes 也算是间接解决了这个问题。&lt;/p&gt;
+&lt;/blockquote&gt;
+</description>
+        </item>
         
         <item>
           <title>退群「Hall of shame」</title>
@@ -1799,7 +1845,7 @@ runtime.sync_runtime_Semrelease 函数屏蔽了，后面有时间会更新这部
         <item>
           <title>可以同时对一个 go string 进行读写操作吗？</title>
           <link>/post/2020-go-string-data-race/</link>
-          <pubDate>Sat, 30 May 2020 00:00:00 +0800</pubDate>
+          <pubDate>Sat, 30 May 2020 00:00:00 -0400</pubDate>
           <guid>https://fuweid.com/post/2020-go-string-data-race/</guid>
           <description>&lt;p&gt;写过 Go 代码的同学都知道，在程序内启动多个 goroutine 处理任务是很常见的事情，
 启动一个 goroutine 要比启动一个线程简单的多。当多个 goroutine 同时处理同一份数据时，
@@ -1957,7 +2003,7 @@ goroutine 1: set s.str = &amp;#34;panic?&amp;#34;
         <item>
           <title>在线看 O&#39;Reilly 动物新书指南</title>
           <link>/post/2020-digital-book-from-safari/</link>
-          <pubDate>Sat, 21 Mar 2020 00:00:00 +0800</pubDate>
+          <pubDate>Sat, 21 Mar 2020 00:00:00 -0400</pubDate>
           <guid>https://fuweid.com/post/2020-digital-book-from-safari/</guid>
           <description>&lt;p&gt;想当初，为了看 &lt;a href=&#34;http://pages.cs.wisc.edu/~remzi/OSTEP/#book-chapters&#34;&gt;Operating Systems: Three Easy Pieces&lt;/a&gt; 和 &lt;a href=&#34;https://book.douban.com/subject/30218046/&#34;&gt;A Philosophy of Software Design&lt;/a&gt; 原版技术书，还特别麻烦了朋友从国外人肉带回来，成本极高。
 但如果等国内出版社引进，就会出现时间跨度太大没法尝鲜；加上翻译水平参差不齐，等待中文版的路子基本上行不通。
@@ -2066,7 +2112,7 @@ Morgan Kaufmann and Syngress; videos and webinars on hot topics, presented by to
         <item>
           <title>Goroutine Scheduler Overview</title>
           <link>/post/2018-goroutine-scheduler-overview/</link>
-          <pubDate>Tue, 06 Feb 2018 00:00:00 +0800</pubDate>
+          <pubDate>Tue, 06 Feb 2018 00:00:00 -0500</pubDate>
           <guid>https://fuweid.com/post/2018-goroutine-scheduler-overview/</guid>
           <description>&lt;p&gt;Goroutine 是 Golang 世界里的 &lt;code&gt;Lightweight Thread&lt;/code&gt; 。&lt;/p&gt;
 &lt;p&gt;Golang 在语言层面支持多线程，代码可以通过 &lt;code&gt;go&lt;/code&gt; 关键字来启动 Goroutine ，调用者不需要关心调用栈的大小，函数上下文等等信息就可以完成并发或者并行操作，加快了我们的开发速度。
@@ -3377,7 +3423,7 @@ func convI2E(i iface) (r eface) {...}
         <item>
           <title>让你的 shell 脚本变得可控</title>
           <link>/post/2017-control-your-shell-script/</link>
-          <pubDate>Mon, 20 Mar 2017 00:00:00 +0800</pubDate>
+          <pubDate>Mon, 20 Mar 2017 00:00:00 -0400</pubDate>
           <guid>https://fuweid.com/post/2017-control-your-shell-script/</guid>
           <description>&lt;p&gt;刚开始接触 shell 脚本的时候，最痛苦的地方在于出了问题，却不容易定位问题。&lt;/p&gt;
 &lt;p&gt;shell 脚本遇到错误，“大部分” 情况下都会继续执行剩下的命令，最后返回 Zero &lt;a href=&#34;https://en.wikipedia.org/wiki/Exit_status&#34;&gt;Exit Code&lt;/a&gt;  并不代表着结果正确。&lt;/p&gt;
@@ -3593,7 +3639,7 @@ fi
         <item>
           <title>shebang - #!</title>
           <link>/post/2017-shebang-compatibility-version/</link>
-          <pubDate>Sun, 19 Mar 2017 00:00:00 +0800</pubDate>
+          <pubDate>Sun, 19 Mar 2017 00:00:00 -0400</pubDate>
           <guid>https://fuweid.com/post/2017-shebang-compatibility-version/</guid>
           <description>&lt;p&gt;写脚本的时候通常会在脚本的开头加上 &lt;a href=&#34;https://en.wikipedia.org/wiki/Shebang_(Unix)&#34;&gt;shebang&lt;/a&gt;, 系统会将这段内容作为解释器指令，比如 bash shell 脚本。&lt;/p&gt;
 &lt;pre&gt;&lt;code&gt;$&amp;gt; cat example
@@ -3637,7 +3683,7 @@ HaHa
         <item>
           <title>Netfilter 初探</title>
           <link>/post/2017-netfilter-beginning/</link>
-          <pubDate>Fri, 17 Mar 2017 00:00:00 +0800</pubDate>
+          <pubDate>Fri, 17 Mar 2017 00:00:00 -0400</pubDate>
           <guid>https://fuweid.com/post/2017-netfilter-beginning/</guid>
           <description>&lt;p&gt;Linux 内核在 2.4.x 版本中正式引入 &lt;a href=&#34;http://www.netfilter.org/&#34;&gt;Netfilter&lt;/a&gt; 模块，该模块负责网络数据包过滤和 &lt;a href=&#34;https://en.wikipedia.org/wiki/Network_address_translation&#34;&gt;Network Address Translation&lt;/a&gt;。
 Netfilter 代表着一系列的 Hook ，被内核嵌入到 TCP/IP 协议栈中，数据包在穿梭协议栈时，Hook 会检查数据包，从而达到访问控制的作用。&lt;/p&gt;
