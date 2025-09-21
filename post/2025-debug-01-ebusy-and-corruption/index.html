@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html>
+    <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+    <title>
+        
+            Fu, Wei: Debug Log #1: From Containerd -EBUSY to ETCD bbolt Corruption
+        
+    </title>
+
+    <meta property="og:title" content="Debug Log #1: From Containerd -EBUSY to ETCD bbolt Corruption"/>
+    <meta property="og:Section" content="website"/>
+    <meta property="og:url" content="https://fuweid.com/post/2025-debug-01-ebusy-and-corruption/"/>
+    <meta property="og:image" content="https://fuweid.com/favicon.jpg"/>
+    <meta property="og:site_name" content="Fu, Wei"/>
+    <meta property="og:description" content=""/>
+
+    <link rel="stylesheet" href="/css/fontawesome/all.css" />
+    <link rel="stylesheet" href="/css/main.css" /> 
+    <link rel="stylesheet" href="/css/normalize.css">
+    <link rel="stylesheet" href="/css/prettify.css">
+    <link rel="shortcut icon" href="https://fuweid.com/favicon.jpg">
+    <link rel="icon" href="https://fuweid.com/favicon.jpg">
+    <script type="text/javascript" src="/js/prettify.js"></script>
+</head>
+
+
+    <body onload="doPrettify()">
+        <header>
+    <nav>
+        <ul class="home">
+            <li>
+                <a href="https://fuweid.com/">Fu, Wei</a>
+            </li>
+        </ul>
+        <ul class="social">
+            <li>
+                <a class="fab fa-github" href="https://github.com/fuweid" target="_blank"></a>
+            </li>
+            <li>
+                <a class="fab fa-twitter" href="https://twitter.com/fuweid89" target="_blank"></a>
+            </li>
+            <li>
+                <a class="fas fa-rss" href="https://fuweid.com//index.xml" target="_blank"></a>
+            </li>
+        </ul>
+    </nav>
+</header>
+
+
+        <div class="container">
+            <article class="single">
+                <h1 class="title"> Debug Log #1: From Containerd -EBUSY to ETCD bbolt Corruption </h1>
+                <h4 class="time"> September 21, 2025 </h4>
+                <p>我打算开一个 Debug Log 系列，把平时在开源项目或生产环境里遇到的有趣问题记录下来。作为系列的第一篇，我想分享近期的两次排查经历：一次是 Containerd 临时挂载点残留，另一次是 ETCD 数据库损坏。</p>
+<h2 id="-ebusy-导致临时挂摘点残留">-EBUSY 导致临时挂摘点残留</h2>
+<p>Netflix 工程师 halaney 在 Containerd 社区提交了一个问题 <a href="https://github.com/containerd/containerd/issues/12139">#12139</a>：他们在测试环境中遇到了大量的 <a href="https://www.kernel.org/doc/html/next/filesystems/idmappings.html">Idmappings</a> 临时挂载点残留问题，几乎在并发创建容器时必现。据了解，Netflix 计划升级到 Containerd v2.0.x，这个问题成为了升级的障碍。他们内部已经通过使用 <a href="https://man7.org/linux/man-pages/man2/umount.2.html#:~:text=MNT_DETACH%20(since%20Linux%202.4.11)">MNT_DETACH</a> - lazy umount 的方式来规避。不过，我个人并不喜欢这种做法，因为它并没有真正解决问题本身。</p>
+<p>前几年，我曾遇到一个「黑科技」日志采集方案——它会扫描 <code>/run/containerd</code> 目录下的挂载点，也就是容器的根目录，并长期持有容器根目录下的日志文件句柄，导致出现 <a href="https://man7.org/linux/man-pages/man2/umount.2.html#:~:text=EBUSY%20%20target%20could%20not%20be%20unmounted%20because%20it%20is%20busy.">-EBUSY</a> 错误而无法清理容器挂载点，从而出现残留。业务为重，只能妥协，加上 MNT_DETACH :)。过往社区也出现过类似问题，但最终发现都是安全软件间歇性扫描导致的。因此一开始排查这个残留问题时，我会下意识地认为这可能是「环境」问题。</p>
+<p>我当时怀疑的对象是 <a href="https://www.freedesktop.org/software/systemd/man/latest/systemd.mount.html">systemd.mount</a>。每当 host mount_namespace 出现新的挂载点时，systemd 就会生成一个 mount.unit。比如当你运行 <code>docker run -d busybox sleep 1d</code> 时，你会发现会有一个这样奇葩的 mount.unit。老实说，我并不知道这东西的实际作用 :)</p>
+<div class="highlight"><pre class="chroma"><code class="language-bash" data-lang="bash">$ sudo systemctl list-units <span class="p">|</span> grep var-lib-docker
+  var-lib-docker-overlay2-9643eb3cca86f8de7ac881124eb01ce10d3af44872f246e196a1cfe9e0ec6753-merged.mount loaded active     mounted      /var/lib/docker/overlay2/9643eb3cca86f8de7ac881124eb01ce10d3af44872f246e196a1cfe9e0ec6753/merged
+
+$ sudo systemctl status var-lib-docker-overlay2-9643eb3cca86f8de7ac881124eb01ce10d3af44872f246e196a1cfe9e0ec6753-merged.mount
+
+● var-lib-docker-overlay2-9643eb3cca86f8de7ac881124eb01ce10d3af44872f246e196a1cfe9e0ec6753-merged.mount - /var/lib/docker/overlay2/9643eb3cca86f8de7ac881124eb01ce10d3af44872f246e196a1cfe9e0ec6753/merged
+     Loaded: loaded <span class="o">(</span>/proc/self/mountinfo<span class="o">)</span>
+     Active: active <span class="o">(</span>mounted<span class="o">)</span> since Sat 2025-09-20 22:51:06 EDT<span class="p">;</span> 6min ago
+      Where: /var/lib/docker/overlay2/9643eb3cca86f8de7ac881124eb01ce10d3af44872f246e196a1cfe9e0ec6753/merged
+       What: overlay
+</code></pre></div><p>通过 <a href="https://manpages.debian.org/unstable/bpfcc-tools/opensnoop-bpfcc.8.en.html">opensnoop-bpfcc</a> 和 <a href="https://github.com/bpftrace/bpftrace">bpftrace</a> 等工具观察各种可能的系统调用，但 <a href="https://github.com/systemd/systemd/blob/49e5c6462e6fe82e607b7e395bd01cd8a54133a3/src/core/mount.c#L2185">systemd.mount_process_proc_self_mountinfo</a> 只是读取了 <code>/proc/self/mountinfo</code>，并不是问题的根源。后来我又花了不少时间研究 <a href="https://github.com/opencontainers/runc">runc</a> 相关逻辑，发现 runc 做了很多保护性处理，确保挂载点传播不会引发问题。最后只能回过头来看 Containerd 的代码了。</p>
+<p>从 <a href="https://github.com/anakryiko/retsnoop">retsnoop</a> 的结果来看，<a href="https://elixir.bootlin.com/linux/v6.14/source/fs/pnode.c#L420">mnt_get_count</a> 在 <a href="https://elixir.bootlin.com/linux/v6.14/source/fs/pnode.c#L407">propagate_mount_busy</a> 函数中返回了多个引用（如下图所示），这很可能是因为多个文件句柄同时指向了同一个挂载点。结合此前的观察，可以排除外部进程扫描的可能性，因此这些额外引用几乎只能来源于子进程创建过程。</p>
+<p><img src="/img/2025-debug-01-ebusy-and-corruption/retsnoop-result.png" alt="retsnoop-result"></p>
+<p>IDmapping 是在挂载点上建立一个 UID/GID 映射层，使同一份数据在不同目录下呈现不同的所有者身份，具体细节可以查阅 <a href="https://fuweid.com/post/2023-containerd-17-userns/">containerd 1.7: UserNamespace Stateless Pod</a>。IDmapping 的挂载流程如下：</p>
+<ul>
+<li>Step 1：通过 <a href="https://lwn.net/Articles/829496/">open_tree(2)</a> 复制一份源目录的挂载子树，并获得一个指向该子树的文件句柄。</li>
+<li>Step 2：通过 <a href="https://man7.org/linux/man-pages/man2/mount_setattr.2.html">mount_setattr(2)</a> 系统调用修改挂载子树的属性。主要利用 user_namespace 引用来调整 UID/GID 映射。
+<ul>
+<li>例如，源目录所有者是 root，我们可以映射成用户 1000。</li>
+</ul>
+</li>
+<li>Step 3：通过 move_mount(2) 系统调用将挂载子树移动到目标目录，这时挂载点形成。</li>
+<li>Step 4：关闭文件句柄。</li>
+</ul>
+<p>在第三步成功返回后，该文件句柄会指向目标目录（即挂载点）。因此，在关闭前，它可能被复制到子进程中，例如通过 <a href="https://man7.org/linux/man-pages/man2/clone.2.html">clone(2)</a> 系统调用。即使 Containerd 在第一步中使用了 <code>OPEN_TREE_CLOEXEC</code>，在执行 <a href="https://man7.org/linux/man-pages/man2/execve.2.html">execve(2)</a> 之前，子进程仍会持有挂载点的句柄。如果这时调用 umount，就会触发 EBUSY 错误。</p>
+<p>此外，第二步需要 Containerd 通过一次 <a href="https://fuweid.com/post/2024-ptrace-hallofshame/">ptrace re-exec</a> 获取 user_namespace 引用。这意味着在并发创建容器时，目标挂载点的文件句柄很容易被复制到 Containerd 的子进程中。当然，调用二进制 CNI 以及启动 contained-shim 同样也会触发复制行为。因此，<a href="https://elixir.bootlin.com/linux/v6.14/source/fs/pnode.c#L420">mnt_get_count</a> 返回高引用数也就可以理解了。由于 <a href="https://lwn.net/Articles/829496/">open_tree(2)</a> 在挂载时必须生成文件句柄，这一问题基本无法避免。最终的解决方案只能依靠多次重试，毕竟 <a href="https://man7.org/linux/man-pages/man2/clone.2.html">clone(2)</a> 与 <a href="https://man7.org/linux/man-pages/man2/execve.2.html">execve(2)</a> 之间的时间窗口相对较小。后续可以通过 mount plugin 统一管理所有挂载点，并借助 GC 机制从根本上解决残留问题。</p>
+<p>在这里，我强烈推荐使用 <a href="https://github.com/anakryiko/retsnoop">retsnoop</a> 来排查 Linux 内核中的系统调用错误。即便不是内核开发者，也可以通过全局检索 Linux 源代码，并结合 retsnoop 提供的调用栈信息，高效地进行定位与分析。</p>
+<h2 id="panic-assertion-failed-page-expected-to-be-5">panic: assertion failed: Page expected to be: 5</h2>
+<p>ETCD 社区最近将故障注入测试迁移到了 <a href="https://antithesis.com/">antithesis</a> 产品上。该产品会在测试运行过程中随机注入网络丢包、网络连通性中断以及 CPU 限流等故障。<a href="https://antithesis.com/docs/environment/fault_injection/">文档</a> 中并未说明具体实现方式，但由于 ETCD 测试基于 docker-compose，最直观的 CPU 限流手段就是通过 cgroup 来完成。</p>
+<p>在迁移过程中发现，ETCD Member 会接收到损坏的 snapshot（见 <a href="https://github.com/etcd-io/etcd/issues/20271">#20271</a>），如下输出所示。这表明 bbolt 存储结构中出现了错误的引用。ETCD 社区过去也曾遇到过许多类似的数据库损坏问题，其中大多数由断电引起。由于对 antithesis 环境缺乏深入了解，起初很容易将其误认为是网络故障导致的错误。</p>
+<div class="highlight"><pre class="chroma"><code class="language-bash" data-lang="bash">panic: assertion failed: Page expected to be: 5, but self identifies as <span class="m">0</span>
+goroutine <span class="m">8052</span> <span class="o">[</span>running<span class="o">]</span>:
+go.etcd.io/bbolt/internal/common.Assert<span class="o">(</span>...<span class="o">)</span>
+	go.etcd.io/bbolt@v1.4.2/internal/common/verify.go:65
+go.etcd.io/bbolt/internal/common.<span class="o">(</span>*Page<span class="o">)</span>.FastCheck<span class="o">(</span>0x7f16ce802000, 0x5<span class="o">)</span>
+	go.etcd.io/bbolt@v1.4.2/internal/common/page.go:83 +0x1d9
+go.etcd.io/bbolt.<span class="o">(</span>*Tx<span class="o">)</span>.page<span class="o">(</span>0xc0010a31d0?, 0xc0002992e8?<span class="o">)</span>
+	go.etcd.io/bbolt@v1.4.2/tx.go:598 +0x7b
+go.etcd.io/bbolt.<span class="o">(</span>*Tx<span class="o">)</span>.forEachPageInternal<span class="o">(</span>0xc000c71340, <span class="o">{</span>0xc0010a31d0, 0x1, 0xa<span class="o">}</span>, 0xc0002993a0<span class="o">)</span>
+</code></pre></div><p>该测试过程主要通过注入网络故障和 CPU 限流来触发 Follower 节点落后于 Leader 日志进度的情况。随后，Leader 会发送完整数据库快照（snapshot）以完成同步。除此之外，测试还会以高频率对所有 Member 进行 <a href="https://etcd.io/docs/v3.6/op-guide/maintenance/#:~:text=every%2030%2Dminute.-,Defragmentation,-After%20compacting%20the">defragment</a> 操作。</p>
+<p>这个问题已经放置一段时间，没有太大进展，因为大家普遍认为是环境问题。后来抱着试一试的心态去查看 ETCD Member 日志。只能说这种方法比较「原始」，一旦日志记录不够详尽，没有关键的信息，就几乎是在浪费时间。只能说运气还不错，大部分 debug 信息都输出了。</p>
+<p>Follower 收到的数据库快照显示 Index 为 74，并且确认已落盘。然而，当该 Follower 从该快照恢复时，却显示 Index 为 67。由此可以确认，这不是环境问题，而是 ETCD 内部存在 Race condition。</p>
+<p><img src="/img/2025-debug-01-ebusy-and-corruption/etcd-snapshot.png" alt="etcd-snapshot"></p>
+<p>这个 race condition 是由 defragment 操作触发的。在 ETCD 使用接收的快照之前，它会通过 <a href="https://man7.org/linux/man-pages/man2/rename.2.html">rename(2)</a> 覆盖当前正在使用的数据库文件。事件时间线如下：</p>
+<p><img src="/img/2025-debug-01-ebusy-and-corruption/timeline.png" alt="etcd-timeline"></p>
+<p>需要解释的是：如果一个进程保持着一个文件句柄，即使这个文件被删除或覆盖，该进程依然可以继续通过这个句柄操作文件。一个最直观的场景是：业务进程写了大量日志，而磁盘空间几乎耗尽，此时需要清理日志文件，但业务进程不能重启。如果直接删除日志文件，文件并不会真正释放空间，因为业务进程仍然持有文件句柄，可以继续写入数据。正确的做法是使用 <a href="https://man7.org/linux/man-pages/man1/truncate.1.html">truncate(1)</a> - <code>truncate -s 0 log</code> 或者是 <code>cat /dev/null &gt; log</code>，保留原文件的 inode，将文件大小强制清零，从而释放磁盘空间，同时保证业务进程继续写入日志而不受影响。</p>
+<p>同样地，在 <code>T10</code> 之后，ETCD Member 会将后续的变化写入到一个已经被覆盖的文件中。到这一步，其实问题不大——重启后的 ETCD Member 仍然落后于其他 Member，仍可以继续接收新的快照。然而，从 <code>T10</code> 之后，它开始成为 Leader。在测试的后期，它需要向其他 Member 发送快照，这时问题就暴露出来了。</p>
+<p>在发送快照时，ETCD 利用了多版本并行控制 (MVCC) 特性，只会发送当前 bbolt 只读事务对应的版本。bbolt 数据库的前两页保存着整棵 B+Tree 的根节点引用，因此在发送快照前，ETCD 会先发送当前事务版本的根节点引用，然后再读取数据库的其余部分。即使在此过程中有新的事务提交，也不会影响当前版本的数据，从而保证快照的一致性，如下图所示。这里有一个前提，文件不能被覆盖。</p>
+<p><img src="/img/2025-debug-01-ebusy-and-corruption/bbolt-writeTo.png" alt="bbolt-writeTo"></p>
+<p>在测试过程中，ETCD 的 snap.db 文件已经被 <code>T8</code> 时刻的操作覆盖，其内容与正在使用的、已被删除的文件完全不同。值得注意的是，<a href="https://github.com/etcd-io/bbolt/blob/v1.4.1/tx.go#L389">bbolt.WriteTo</a> 并没有使用原有的文件句柄，而是重新打开了一个新的句柄。由于前两页存储的根节点引用与实际存储内容不一致，最终会导致 bbolt 初始化失败并触发 panic。</p>
+<p>为解决该问题，ETCD 需要避免 Race Condition（见 <a href="https://github.com/etcd-io/etcd/pull/20553">#20553</a>），而 bbolt 则必须确保传输的文件内容保持一致（见 <a href="https://github.com/etcd-io/bbolt/pull/1057">#1057</a>）。不过，对于 <a href="https://github.com/etcd-io/bbolt/pull/1057">#1057</a>，实际上也可以考虑重新打开一份已被删除文件的句柄，因为 io.Copy 可以利用 <a href="https://man7.org/linux/man-pages/man2/splice.2.html">splice(2)</a> 实现 Zero-Copy。当然，在 ETCD 发送快照时，中间存在一层 Copy，此时无法使用 <a href="https://man7.org/linux/man-pages/man2/splice.2.html">splice(2)</a>，因此使用 <a href="https://man7.org/linux/man-pages/man2/pwrite.2.html">pread(2)</a> 也还行吧。</p>
+<div class="highlight"><pre class="chroma"><code class="language-diff" data-lang="diff"><span class="gh">diff --git a/tx.go b/tx.go
+</span><span class="gh">index f32a209..d6c2e85 100644
+</span><span class="gh"></span><span class="gd">--- a/tx.go
+</span><span class="gd"></span><span class="gi">+++ b/tx.go
+</span><span class="gi"></span><span class="gu">@@ -5,8 +5,10 @@ import (
+</span><span class="gu"></span>        &#34;fmt&#34;
+        &#34;io&#34;
+        &#34;os&#34;
+<span class="gi">+       &#34;path/filepath&#34;
+</span><span class="gi"></span>        &#34;runtime&#34;
+        &#34;sort&#34;
+<span class="gi">+       &#34;strconv&#34;
+</span><span class="gi"></span>        &#34;strings&#34;
+        &#34;sync/atomic&#34;
+        &#34;time&#34;
+<span class="gu">@@ -390,7 +392,7 @@ func (tx *Tx) Copy(w io.Writer) error {
+</span><span class="gu"></span> // If err == nil then exactly tx.Size() bytes will be written into the writer.
+ func (tx *Tx) WriteTo(w io.Writer) (n int64, err error) {
+        // Attempt to open reader with WriteFlag
+<span class="gd">-       f, err := tx.db.openFile(tx.db.path, os.O_RDONLY|tx.WriteFlag, 0)
+</span><span class="gd"></span><span class="gi">+       f, err := tx.db.openFile(filepath.Join(&#34;/proc&#34;, strconv.Itoa(os.Getpid()), &#34;fd&#34;, strconv.Itoa(int(tx.db.file.Fd()))), os.O_RDONLY|tx.WriteFlag, 0)
+</span><span class="gi"></span>        if err != nil {
+                return 0, err
+        }
+</code></pre></div><h2 id="最后">最后</h2>
+<p>我尝试用 AI 来排查这两个问题，但可能是使用方式不对。即使输入了大量信息，把我的分析步骤都写了出来，依然得不到理想的结果。最接近的一次是，它认为我没有关闭 <a href="https://lwn.net/Articles/829496/">open_tree(2)</a> 返回的句柄，于是它在代码里加了一行关闭操作。结果却导致对同一个句柄进行了两次关闭，最后它又开始聚焦在为什么会发生新的错误&hellip;</p>
+
+            </article>
+        </div>
+
+        <footer>
+    &copy; 2025 Fu Wei
+</footer>
+
+<script>
+    function doPrettify(){
+        pres=document.getElementsByTagName('pre');
+        for (i=0; i < pres.length; i++) {
+            pres[i].className+=" prettyprint";
+        }
+        prettyPrint();
+    }
+</script>
+
+
+<script async src="https://www.googletagmanager.com/gtag/js?id=G-1C7VLVHN52"></script>
+<script>
+  window.dataLayer = window.dataLayer || [];
+  function gtag(){dataLayer.push(arguments);}
+  gtag('js', new Date());
+
+  gtag('config', 'G-1C7VLVHN52');
+</script>
+
+    </body>
+</html>
