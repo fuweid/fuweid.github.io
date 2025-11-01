@@ -5,7 +5,22 @@
     <link>https://fuweid.com/post/</link>
     <description>Recent content in Posts on Fu, Wei</description>
     <generator>Hugo -- gohugo.io</generator>
-    <lastBuildDate>Sun, 21 Sep 2025 09:20:45 -0500</lastBuildDate><atom:link href="https://fuweid.com/post/index.xml" rel="self" type="application/rss+xml" />
+    <lastBuildDate>Fri, 31 Oct 2025 19:20:45 -0500</lastBuildDate><atom:link href="https://fuweid.com/post/index.xml" rel="self" type="application/rss+xml" />
+    <item>
+      <title>Previewing Rebase Snapshots in containerd v2.2.0</title>
+      <link>https://fuweid.com/post/2025-containerd-220-rebase-snapshot/</link>
+      <pubDate>Fri, 31 Oct 2025 19:20:45 -0500</pubDate>
+      
+      <guid>https://fuweid.com/post/2025-containerd-220-rebase-snapshot/</guid>
+      <description>containerd 社区近期发布了 v2.2.0-rc.0 版本，预计将在亚特兰大 KubeCon 前正式 GA。在正式发布之前，我想先分享其中的一个特性 &amp;ndash; Rebase Snapshot，它可以显著提升大型镜像的下载效率。
+Snapshot Model 在 Open Container Initiative (OCI) 镜像标准中，每次对容器镜像的修改都会生成一个镜像层（Image Layer）。每层只包含新增、删除或修改的文件，层与层之间互相依赖，就像 Git 的提交记录一样，后一层是基于前一层构建的。
+容器运行时（消费端）会按照依赖顺序依次应用（或叠加）这些镜像层的数据，最终组合形成容器进程的根文件系统。至于数据如何叠加和存储，则取决于所采用的底层存储。此外，容器进程对其根文件系统产生的变更，可以被「提交」并封装为一个新的镜像层，这是常见的镜像构建方式。
+为了统一管理镜像层和容器文件系统的数据，containerd 引入了 snapshot的概念。它将这些文件系统抽象为可管理的 snapshot，并使用统一的 snapshotter 接口来对接和表达不同底层存储介质（如 OverlayFS, EROFS, OverlayBD, DevMapper 等）的实现方式。
+ NOTE: From 2017: containerd deep dive presentation at the containerd summit
+ Snapshot 包含两个关键状态：
+* Active：在此状态下，允许对文件内容进行添加、删除和修改等操作。 * Committed：一旦 Active Snapshot 被提交（Commit），它将转换为 Committed 状态。 原则上，处于 Committed 状态的文件内容是不可变更的。  在解压镜像层数据时，containerd 会基于上一层 snapshot 来创建新的 active snapshot。上一层 snapshot 可以为空，「通常」表达当前 active snapshot 对应着第一层。解压数据完毕后，再将其提交成 committed 状态；重复此流程直到所有镜像层都处理完毕。Snapshot 之间的依赖关系能帮助 containerd 的 GC 模块识别哪些 snapshot 已经不再被引用（orphan snapshot），从而将其安全删除。但这也意味着 containerd 必须按照顺序解压镜像。</description>
+    </item>
+    
     <item>
       <title>Debug Log #1: From Containerd -EBUSY to ETCD bbolt Corruption</title>
       <link>https://fuweid.com/post/2025-debug-01-ebusy-and-corruption/</link>

@@ -3,9 +3,79 @@
         <title>Fu, Wei</title>
         <link>https://fuweid.com/</link>
         <copyright>2025 Wei Fu</copyright>
-        <lastBuildDate>Sun, 21 Sep 2025 09:20:45 -0500</lastBuildDate>
+        <lastBuildDate>Fri, 31 Oct 2025 19:20:45 -0500</lastBuildDate>
         <atom:link href="/" rel="self" type="application/rss+xml" />
 
+        
+        <item>
+          <title>Previewing Rebase Snapshots in containerd v2.2.0</title>
+          <link>/post/2025-containerd-220-rebase-snapshot/</link>
+          <pubDate>Fri, 31 Oct 2025 19:20:45 -0500</pubDate>
+          <guid>https://fuweid.com/post/2025-containerd-220-rebase-snapshot/</guid>
+          <description>&lt;p&gt;containerd 社区近期发布了 v2.2.0-rc.0 版本，预计将在亚特兰大 KubeCon 前正式 GA。在正式发布之前，我想先分享其中的一个特性 &amp;ndash; Rebase Snapshot，它可以显著提升大型镜像的下载效率。&lt;/p&gt;
+&lt;h1 id=&#34;snapshot-model&#34;&gt;Snapshot Model&lt;/h1&gt;
+&lt;p&gt;在 Open Container Initiative (OCI) 镜像标准中，每次对容器镜像的修改都会生成一个镜像层（Image Layer）。每层只包含新增、删除或修改的文件，层与层之间互相依赖，就像 Git 的提交记录一样，后一层是基于前一层构建的。&lt;/p&gt;
+&lt;p&gt;容器运行时（消费端）会按照依赖顺序依次应用（或叠加）这些镜像层的数据，最终组合形成容器进程的根文件系统。至于数据如何叠加和存储，则取决于所采用的底层存储。此外，容器进程对其根文件系统产生的变更，可以被「提交」并封装为一个新的镜像层，这是常见的镜像构建方式。&lt;/p&gt;
+&lt;p&gt;为了统一管理镜像层和容器文件系统的数据，containerd 引入了 snapshot的概念。它将这些文件系统抽象为可管理的 snapshot，并使用统一的 snapshotter 接口来对接和表达不同底层存储介质（如 OverlayFS, EROFS, OverlayBD, DevMapper 等）的实现方式。&lt;/p&gt;
+&lt;p&gt;&lt;img src=&#34;https://fuweid.com/img/2025-containerd-220-rebase-snapshot/snapshot-model.png&#34; alt=&#34;snapshot-model&#34;&gt;&lt;/p&gt;
+&lt;blockquote&gt;
+&lt;p&gt;NOTE: From &lt;a href=&#34;https://youtu.be/UUDDCetB7_A?si=RmpE2Gy_PEW76JKJ&#34;&gt;2017: containerd deep dive presentation at the containerd summit&lt;/a&gt;&lt;/p&gt;
+&lt;/blockquote&gt;
+&lt;p&gt;Snapshot 包含两个关键状态：&lt;/p&gt;
+&lt;pre&gt;&lt;code&gt;* Active：在此状态下，允许对文件内容进行添加、删除和修改等操作。
+
+* Committed：一旦 Active Snapshot 被提交（Commit），它将转换为 Committed 状态。
+            原则上，处于 Committed 状态的文件内容是不可变更的。
+&lt;/code&gt;&lt;/pre&gt;
+&lt;p&gt;在解压镜像层数据时，containerd 会基于上一层 snapshot 来创建新的 active snapshot。上一层 snapshot 可以为空，「通常」表达当前 active snapshot 对应着第一层。解压数据完毕后，再将其提交成 committed 状态；重复此流程直到所有镜像层都处理完毕。Snapshot 之间的依赖关系能帮助 containerd 的 GC 模块识别哪些 snapshot 已经不再被引用（orphan snapshot），从而将其安全删除。&lt;strong&gt;但这也意味着 containerd 必须按照顺序解压镜像&lt;/strong&gt;。&lt;/p&gt;
+&lt;h1 id=&#34;existing-enhancements-on-pulling&#34;&gt;Existing Enhancements on pulling&lt;/h1&gt;
+&lt;h3 id=&#34;v100-initial-version&#34;&gt;[v1.0.0] Initial Version&lt;/h3&gt;
+&lt;p&gt;在 containerd 的最初版本（2017 年）中，镜像处理流程被设计为两个阶段：首先并发下载所有镜像层，然后按照层级关系依次解压。解压某一层时，containerd 需要先将其所有祖先 snapshot 按顺序进行 union mount，形成完整的基础视图，然后才能在此基础上应用当前层的数据。&lt;/p&gt;
+&lt;h3 id=&#34;v130-direct-unpack-support-for-overlayfshttpsgithubcomcontainerdcontainerdpull3528&#34;&gt;&lt;a href=&#34;https://github.com/containerd/containerd/pull/3528&#34;&gt;[v1.3.0] Direct unpack support for overlayFS&lt;/a&gt;&lt;/h3&gt;
+&lt;p&gt;Union mount 本身是一项开销较高的操作，特别是在执行卸载（umount）时更为明显。在 Linux kernel v5.10（&lt;a href=&#34;https://www.phoronix.com/news/OverlayFS-Linux-5.10&#34;&gt;支持 volatile 选项&lt;/a&gt;）之前，卸载 OverlayFS 挂载点会触发强制刷盘，写放大进一步增大了开销。&lt;strong&gt;而实际上，在解压 OCI 镜像层数据时，并不需要访问上一层已展开的文件内容；containerd 也无需先构建完整的文件系统视图再进行解压。&lt;/strong&gt;&lt;/p&gt;
+&lt;p&gt;因此，从 v1.3 开始，containerd 为 overlayFS snapshotter 引入了一种优化方式：直接将镜像层解压到对应的 snapshot 目录，避免为了解压而执行 union mount。&lt;/p&gt;
+&lt;h3 id=&#34;v130-add-simultaneous-unpack-supporthttpsgithubcomcontainerdcontainerdpull2918files&#34;&gt;&lt;a href=&#34;https://github.com/containerd/containerd/pull/2918/files&#34;&gt;[v1.3.0] Add simultaneous unpack support&lt;/a&gt;&lt;/h3&gt;
+&lt;p&gt;此外，v1.3 版本实施了另一项优化：下载与解压的并行处理。containerd 现在无需等待所有镜像层下载完毕，而是在任何一层下载完成后就立即启动解压任务，以提升镜像处理的整体速度。然而，这项优化存在一个关键的局限性：镜像层的解压必须严格按照其依赖的顺序进行。这意味着即使后面的层（例如第 3 层）比前面的层（例如第 2 层）先下载完成，它也必须等待所有前置层（第 1 层、第 2 层等）下载并解压完成后才能开始处理。由于在大多数镜像结构中，较小或变更较少的层通常位于镜像的末尾，因此顺序依赖使得「并行解压」收益有限。&lt;/p&gt;
+&lt;h3 id=&#34;v210-multipart-layer-fetchhttpsgithubcomcontainerdcontainerdpull10177&#34;&gt;&lt;a href=&#34;https://github.com/containerd/containerd/pull/10177&#34;&gt;[v2.1.0] Multipart layer fetch&lt;/a&gt;&lt;/h3&gt;
+&lt;p&gt;在上一个版本中，containerd 引入了同一镜像层的并发下载能力。利用 OCI Distribution 协议中支持可断点续传 - &lt;a href=&#34;https://github.com/opencontainers/distribution-spec/blob/main/spec.md#resumable-pull&#34;&gt;resumable pull&lt;/a&gt; - 的特性，containerd 会将大型镜像层切分为多个区段，多路并发下载。各区段数据在内存中按顺序重新组合，并最终写回本地磁盘，形成完整的镜像层。这一优化提升了大镜像层的下载速度，但也带来了两个限制：&lt;/p&gt;
+&lt;pre&gt;&lt;code&gt;* 会额外占用内存，因为数据区段需要在内存中进行拼接；
+
+* 效果依赖区段大小配置，划分不合理会影响性能收益。
+&lt;/code&gt;&lt;/pre&gt;
+&lt;p&gt;目前，大多数由 Go 编写的服务（包括容器镜像仓库）默认使用 HTTP/2 协议。然而，HTTP/2 在传输大体积数据时效率并不高，带宽利用率受限，服务端往往需要等待客户端的窗口更新（WINDOW_UPDATE），而非持续传输数据。containerd 通过多连接并发下载来缓解这一问题，本质上是在规避 HTTP/2 流控带来的性能限制。在网络质量可控的情况下，使用单连接的 HTTP/1.1 反而可能实现更高的吞吐性能。&lt;/p&gt;
+&lt;h1 id=&#34;rebase&#34;&gt;Rebase&lt;/h1&gt;
+&lt;p&gt;尽管过去的优化提升了下载效率，但一个事实没有改变：镜像层的解压仍然是按顺序进行的。为了解决这一瓶颈，Derek 在问题 &lt;a href=&#34;https://github.com/containerd/containerd/issues/8881#issuecomment-1654612733&#34;&gt;Parallel Container Layer Unpacking&lt;/a&gt; 中提出了 Rebase Snapshot 来加速处理。&lt;/p&gt;
+&lt;p&gt;经常使用「变基」的朋友对这个词应该不陌生：在 Git 中，&lt;code&gt;git rebase upstream/master&lt;/code&gt; 可以用来更新当前分支。它的本质是将当前分支上的提交，在最新的 master 分支基础上重新回放一遍。&lt;/p&gt;
+&lt;p&gt;&lt;img src=&#34;https://fuweid.com/img/2025-containerd-220-rebase-snapshot/basic-rebase-git.png&#34; alt=&#34;base-rebase-git&#34;&gt;&lt;/p&gt;
+&lt;blockquote&gt;
+&lt;p&gt;NOTE: From &lt;a href=&#34;https://git-scm.com/book/ms/v2/Git-Branching-Rebasing&#34;&gt;https://git-scm.com/book/ms/v2/Git-Branching-Rebasing&lt;/a&gt;&lt;/p&gt;
+&lt;/blockquote&gt;
+&lt;p&gt;同样地，支持 rebase 的 snapshotter 允许在提交时，将一个没有 parent 的 active snapshot 绑定到指定的 committed snapshot 上，如下图所示。&lt;/p&gt;
+&lt;p&gt;&lt;img src=&#34;https://fuweid.com/img/2025-containerd-220-rebase-snapshot/rebase-model.png&#34; alt=&#34;rebase-model&#34;&gt;&lt;/p&gt;
+&lt;p&gt;在下载镜像时，containerd 会同步解压所有镜像层，此时这些 Active snapshot 尚未指定父 snapshot。解压完成后，它们会按顺序提交，并关联到指定的父 snapshot，从而建立层之间的依赖关系。这个过程类似于 Git 的 rebase：在管理层面回放各层提交，实现了真正意义上的「同步解压」。&lt;/p&gt;
+&lt;p&gt;我在本地开发机器上测试了镜像 &lt;strong&gt;huggingface/transformers-pytorch-gpu:4.41.2&lt;/strong&gt;（解压后约 17.7 GiB）的下载与解压效果，并与 containerd v2.1.4 版本进行了对比。&lt;/p&gt;
+&lt;p&gt;本地机器配置如下：&lt;/p&gt;
+&lt;p&gt;&lt;img src=&#34;https://fuweid.com/img/2025-containerd-220-rebase-snapshot/neofetch.png&#34; alt=&#34;neofetch&#34;&gt;&lt;/p&gt;
+&lt;p&gt;为了避免网络带宽的影响，我把镜像下载到本地，并传到本地运行的 registry 服务里。&lt;strong&gt;优化效果还是挺明显，一倍左右&lt;/strong&gt;。&lt;/p&gt;
+&lt;blockquote&gt;
+&lt;p&gt;v2.1.4  需要 - &lt;strong&gt;72s&lt;/strong&gt;&lt;/p&gt;
+&lt;ul&gt;
+&lt;li&gt;关闭 multipart layer fetch 优化&lt;/li&gt;
+&lt;li&gt;max_concurrent_download = 3&lt;/li&gt;
+&lt;/ul&gt;
+&lt;/blockquote&gt;
+&lt;p&gt;&lt;img src=&#34;https://fuweid.com/img/2025-containerd-220-rebase-snapshot/v214-72.png&#34; alt=&#34;v214-72&#34;&gt;&lt;/p&gt;
+&lt;blockquote&gt;
+&lt;p&gt;v2.2.0-rc.0 需要 - &lt;strong&gt;34.7s&lt;/strong&gt;&lt;/p&gt;
+&lt;ul&gt;
+&lt;li&gt;关闭 multipart layer fetch 优化&lt;/li&gt;
+&lt;li&gt;max_concurrent_download = 3&lt;/li&gt;
+&lt;li&gt;Max_concurrent_unpacks = 3&lt;/li&gt;
+&lt;/ul&gt;
+&lt;/blockquote&gt;
+&lt;p&gt;&lt;img src=&#34;https://fuweid.com/img/2025-containerd-220-rebase-snapshot/v2.2.0-rc.0-34.png&#34; alt=&#34;v220-34&#34;&gt;&lt;/p&gt;
+</description>
+        </item>
         
         <item>
           <title>Debug Log #1: From Containerd -EBUSY to ETCD bbolt Corruption</title>
