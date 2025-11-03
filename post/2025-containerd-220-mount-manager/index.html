@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html>
+    <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+    <title>
+        
+            Fu, Wei: Previewing new mount manager in containerd v2.2.0
+        
+    </title>
+
+    <meta property="og:title" content="Previewing new mount manager in containerd v2.2.0"/>
+    <meta property="og:Section" content="website"/>
+    <meta property="og:url" content="https://fuweid.com/post/2025-containerd-220-mount-manager/"/>
+    <meta property="og:image" content="https://fuweid.com/favicon.jpg"/>
+    <meta property="og:site_name" content="Fu, Wei"/>
+    <meta property="og:description" content=""/>
+
+    <link rel="stylesheet" href="/css/fontawesome/all.css" />
+    <link rel="stylesheet" href="/css/main.css" /> 
+    <link rel="stylesheet" href="/css/normalize.css">
+    <link rel="stylesheet" href="/css/prettify.css">
+    <link rel="shortcut icon" href="https://fuweid.com/favicon.jpg">
+    <link rel="icon" href="https://fuweid.com/favicon.jpg">
+    <script type="text/javascript" src="/js/prettify.js"></script>
+</head>
+
+
+    <body onload="doPrettify()">
+        <header>
+    <nav>
+        <ul class="home">
+            <li>
+                <a href="https://fuweid.com/">Fu, Wei</a>
+            </li>
+        </ul>
+        <ul class="social">
+            <li>
+                <a class="fab fa-github" href="https://github.com/fuweid" target="_blank"></a>
+            </li>
+            <li>
+                <a class="fab fa-twitter" href="https://twitter.com/fuweid89" target="_blank"></a>
+            </li>
+            <li>
+                <a class="fas fa-rss" href="https://fuweid.com//index.xml" target="_blank"></a>
+            </li>
+        </ul>
+    </nav>
+</header>
+
+
+        <div class="container">
+            <article class="single">
+                <h1 class="title"> Previewing new mount manager in containerd v2.2.0 </h1>
+                <h4 class="time"> November 2, 2025 </h4>
+                <p>延续上一篇<a href="https://fuweid.com/post/2025-containerd-220-rebase-snapshot/">文章</a>，在 v2.2.0 版本中最关键的更新是 Mount Manager 的引入。该功能主要用于简化现有 snapshotter 的管理方式，并为后续用户自定义的存储方案提供更灵活的集成能力。在深入介绍之前，我们先回顾一下 snapshotter 在演进过程中存在的问题。</p>
+<h2 id="mount-by-snapshotter-">Mount by Snapshotter ?</h2>
+<p>最初，snapshotter 的接口设计仅负责管理 snapshot 的生命周期；至于 snapshot 的挂载（mount）动作，则由上层组件自行处理，例如镜像解压插件（diff）或 containerd-shim。该设计的前提是假设 snapshotter 的存储行为足够简单，挂载逻辑完全可以依赖底层文件系统的能力，例如 OverlayFS 的 union mounting 特性。</p>
+<p><img src="/img/2025-containerd-220-mount-manager/2017-snapshot-api.png" alt="2017-snapshot-api"></p>
+<center>From <a href="https://youtu.be/UUDDCetB7_A?si=RmpE2Gy_PEW76JKJ" target="_blank">2017: containerd deep dive presentation at the containerd summit</a></center>
+<p>然而，这一设计基于的前提过于理想化，忽略了更复杂的使用场景，例如文件系统镜像的初始化、底层块设备的动态添加或移除，以及多阶段的挂载流程。真正暴露设计局限的是延迟加载（lazy loading）技术的引入，其次是安全容器（VM-like container）对挂载的需求。</p>
+<h3 id="v140-skip-the-prepare-phase-with-a-two-stage-commit2"><a href="https://github.com/containerd/containerd/pull/3793">[v1.4.0] Skip the Prepare phase with a two-stage commit</a></h3>
+<p>延迟加载镜像不需要在本地下载完整的镜像层数据，通常只依赖索引信息即可，例如 <a href="https://github.com/dragonflyoss/nydus/blob/master/docs/nydus-image.md">nydus</a>、<a href="https://github.com/containerd/overlaybd">overlayBD</a> 或 <a href="https://github.com/containerd/stargz-snapshotter">stargz</a>。为了让 containerd 在延迟加载场景中避免下载原始镜像层数据，snapshotter 采用了<a href="https://github.com/containerd/containerd/blob/main/docs/remote-snapshotter.md#snapshotter-apis-for-querying-remote-snapshots">两项约定</a>:</p>
+<ol>
+<li>
+<p>所有以 <code>containerd.io/snapshot/</code> 开头的用户自定义标签会被透传到 <code>snapshotter.Prepare</code> 接口。snapshotter 可借助这些标签获取镜像相关信息（具体取决于各自的存储方案）。这些信息可以在镜像构建阶段就写入 OCI 镜像的元数据中，containerd 会自动识别并传递。</p>
+</li>
+<li>
+<p>在 Prepare 阶段，containerd 会传递标签 <code>containerd.io/snapshot.ref=chainID</code>。如果自定义 snapshotter 使用延迟加载技术，它可以利用这些标签获取镜像索引数据并完成初始化。此时，snapshotter 应在 Prepare 阶段直接将 snapshot 提交为 Committed 状态，并返回 <code>ErrAlreadyExists</code>，让 containerd 认为该层已准备就绪，然后继续处理下一个镜像层。</p>
+</li>
+</ol>
+<p>在第二个约定中，自定义 snapshotter 可能会发起 HTTP 或 RPC 请求，从而导致 Prepare 调用耗时较长。而 containerd 底层的元数据存储（metadata plugin）依赖 <a href="https://github.com/etcd-io/bbolt">boltdb</a>，这是一种仅支持单写操作的嵌入式数据库。由于 snapshot 元数据同时由元数据存储和 snapshotter 的双重 boltdb 管理，为避免单个大锁阻塞其他操作，containerd 将 Prepare 阶段的数据提交设计为两步式流程。</p>
+<blockquote>
+<p>NOTE: 使用双 boltdb 管理的一个好处是，GC 扫描可以以异步方式清理 snapshot，从而避免阻塞其他操作。</p>
+</blockquote>
+<p>与 OverlayFS snapshotter 不同，延迟加载类存储必须在 Prepare 阶段提前完成容器根目录挂载所需的初始化。例如，stargz-snapshotter 会在这一阶段启动 FUSE 挂载，而 overlayBD 则通过 <a href="https://www.kernel.org/doc/Documentation/target/tcmu-design.txt">TCMU</a> 初始化 iSCSI 块设备。由于 containerd 在容器启动前只会调用一次 Prepare 来创建可写层，snapshotter 只能利用这个唯一窗口完成初始化 —— 这实际上形成了文档未明确说明的 <strong>「隐含的第三个约定」</strong> 。</p>
+<p>但随之出现了新的问题：这些初始化过程中创建的挂载点或设备，应在何时安全清理？</p>
+<p>容器根目录的最终挂载和清理都由 containerd-shim 完成，而 snapshotter 仅会在 snapshot 被删除时才执行清理。这意味着挂载点或设备可能在容器退出后仍被保留，从而导致清理滞后，甚至引起额外的系统资源占用。</p>
+<h3 id="2022-add-new-extraoptions-field">[2022] Add new ExtraOptions field?</h3>
+<p>同样，安全容器在启动前也需要执行额外的初始化步骤，仅依靠现有的 snapshotter 接口无法优雅地实现优化。曾经，Kata Containers 社区提出通过 <a href="https://github.com/containerd/containerd/pull/6746">ExtraOptions</a> 将配置信息传递给 Kata-container-shim，但最终被否决。原因很明确：在容器启动前，不仅 containerd-shim 会挂载容器根目录，CRI 插件也需要挂载它以获取进程的 UID/GID。一旦 containerd 无法识别或理解 ExtraOptions，这套方案就无法成立。此外，ExtraOptions 本身也无法表达复杂的初始化逻辑，因此无法满足需求。</p>
+<blockquote>
+<p>NOTE: ExtraOptions 需求来源于机密计算 - <a href="https://github.com/confidential-containers/confidential-containers/issues/137">https://github.com/confidential-containers/confidential-containers/issues/137</a></p>
+</blockquote>
+<h3 id="2023-mounthelper-binary">[2023] mount.helper binary?</h3>
+<p>在 Darwin 支持开发阶段，Akihiro Suda 曾提出利用 <a href="https://github.com/containerd/containerd/pull/8789#issuecomment-1687818124">mount.helper in &ndash; Add support for bind-mounts on Darwin (a.k.a. &ldquo;make native snapshotter work&rdquo;)</a> 扩展挂载方式，类似 <a href="https://github.com/containerd/containerd/pull/3765">mount.fuse</a>，用于满足第三方挂载需求。虽然该方案解决了「如何执行挂载」的问题，但 mount 本身只是一个代码库而非插件服务，并且没有处理挂载点生命周期管理，因此 snapshotter 的核心问题仍然没有解决。</p>
+<h3 id="v210-erofs-snapshotter">[v2.1.0] EROFS snapshotter</h3>
+<p>直到上一个版本，新的 <a href="https://docs.kernel.org/filesystems/erofs.html">EROFS</a> 存储支持还是在 Prepare 阶段挂载 loopback 设备。</p>
+<p><img src="/img/2025-containerd-220-mount-manager/v2.1.0-erofs.png" alt="v2.1.4-erofs"></p>
+<h2 id="mount-manager13"><a href="https://github.com/containerd/containerd/issues/11303">Mount Manager</a></h2>
+<p>Derek 在今年年初提出了 Mount Manager 插件。其核心理念是将挂载初始化操作从 snapshotter 中解耦。通过这一插件机制，挂载点的初始化由 <code>Activate</code> 操作负责完成，而不再依赖 snapshotter 的 <code>Prepare</code> 阶段。同时，Mount Manager 可以将挂载点的生命周期与其他资源建立引用关系。例如，将挂载点与容器生命周期绑定：当容器退出并被删除时，containerd 的 GC 模块会沿着引用关系自动清理不再需要的挂载点。</p>
+<div class="highlight"><pre class="chroma"><code class="language-go" data-lang="go"><span class="kd">type</span> <span class="nx">Manager</span> <span class="kd">interface</span> <span class="p">{</span>
+	<span class="nf">Activate</span><span class="p">(</span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span> <span class="kt">string</span><span class="p">,</span> <span class="p">[]</span><span class="nx">Mount</span><span class="p">,</span> <span class="o">...</span><span class="nx">ActivateOpt</span><span class="p">)</span> <span class="p">(</span><span class="nx">ActivationInfo</span><span class="p">,</span> <span class="kt">error</span><span class="p">)</span>
+	<span class="nf">Deactivate</span><span class="p">(</span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span> <span class="kt">string</span><span class="p">)</span> <span class="kt">error</span>
+	<span class="nf">Info</span><span class="p">(</span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span> <span class="kt">string</span><span class="p">)</span> <span class="p">(</span><span class="nx">ActivationInfo</span><span class="p">,</span> <span class="kt">error</span><span class="p">)</span>
+	<span class="nf">Update</span><span class="p">(</span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span> <span class="nx">ActivationInfo</span><span class="p">,</span> <span class="o">...</span><span class="kt">string</span><span class="p">)</span> <span class="p">(</span><span class="nx">ActivationInfo</span><span class="p">,</span> <span class="kt">error</span><span class="p">)</span>
+	<span class="nf">List</span><span class="p">(</span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span> <span class="o">...</span><span class="kt">string</span><span class="p">)</span> <span class="p">([]</span><span class="nx">ActivationInfo</span><span class="p">,</span> <span class="kt">error</span><span class="p">)</span>
+<span class="p">}</span>
+</code></pre></div><blockquote>
+<p>NOTE: containerd GC 设计可查看 - <a href="https://fuweid.com/post/2023-containerd-17-gc/">https://fuweid.com/post/2023-containerd-17-gc/</a>.</p>
+</blockquote>
+<p><code>Activate</code> 会将 snapshotter 管理的挂载信息转换为可以直接用于系统调用的挂载描述。为了支持更灵活的扩展能力，Mount Manager 引入了 Mount Handler 和 Transformer 插件机制。原则上，自定义存储方案只需定义不同的 mount.Type，便可实现独立的挂载初始化逻辑。</p>
+<p>举个例子，如下图所示。 <code>Activate</code> 会完成以下三步：</p>
+<ol>
+<li>
+<p>初始化一个 500 MiB XFS 镜像。</p>
+</li>
+<li>
+<p>创建一个 loopback 设备，将其绑定到第一步创建的镜像上，并完成挂载。</p>
+</li>
+<li>
+<p>在第二步挂载的基础上，创建 upper 和 worker 目录，并返回一个 OverlayFS 挂载信息。</p>
+</li>
+</ol>
+<p><img src="/img/2025-containerd-220-mount-manager/mount-example.png" alt="mount-example"></p>
+<p>内置的 Mount Handler 和 Transformer 通过 Go Template 实现链式初始化过程中信息的共享。引入的概念较多，有兴趣的朋友可以参考文档：<a href="https://github.com/containerd/containerd/blob/v2.2.0-rc.0/docs/mounts.md#mount-management">mounts.md</a>。</p>
+<h2 id="new-intergration--v230">New intergration &gt;= v2.3.0</h2>
+<p>v2.2.0 版本仅引入了 Mount Manager，目前只有 EROFS snapshotter 集成了这一方案（它现在不再在 snapshotter 内部处理任何挂载操作）。此外，Mount Manager 还未开放 Mount Handler 插件 (proxy) 接口，第三方组件的调用方式计划在下一版本中引入。</p>
+<p>可以预见，未来 snapshotter 将更多聚焦于元数据管理，逐步回归其最初的设计定位。而 Mount Manager 则可能成为存储管理的新趋势——它将更加贴近容器运行时，尤其在安全容器的设计中，其作用会愈发明显。</p>
+<h2 id="note">NOTE</h2>
+<p>Mount Manager 的运行同样依赖 boltdb 来管理状态，但要求该数据库运行在 tmpfs 上。如果有人将 containerd 的 state 目录配置在持久化存储中，containerd 初始化时将会失败。通常，社区建议将 state 目录（临时数据）放置在 <code>/run</code> 等 tmpfs 路径下。</p>
+
+            </article>
+        </div>
+
+        <footer>
+    &copy; 2025 Fu Wei
+</footer>
+
+<script>
+    function doPrettify(){
+        pres=document.getElementsByTagName('pre');
+        for (i=0; i < pres.length; i++) {
+            pres[i].className+=" prettyprint";
+        }
+        prettyPrint();
+    }
+</script>
+
+
+<script async src="https://www.googletagmanager.com/gtag/js?id=G-1C7VLVHN52"></script>
+<script>
+  window.dataLayer = window.dataLayer || [];
+  function gtag(){dataLayer.push(arguments);}
+  gtag('js', new Date());
+
+  gtag('config', 'G-1C7VLVHN52');
+</script>
+
+    </body>
+</html>

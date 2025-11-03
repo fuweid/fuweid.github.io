@@ -5,7 +5,21 @@
     <link>https://fuweid.com/post/</link>
     <description>Recent content in Posts on Fu, Wei</description>
     <generator>Hugo -- gohugo.io</generator>
-    <lastBuildDate>Fri, 31 Oct 2025 19:20:45 -0500</lastBuildDate><atom:link href="https://fuweid.com/post/index.xml" rel="self" type="application/rss+xml" />
+    <lastBuildDate>Sun, 02 Nov 2025 10:20:45 -0500</lastBuildDate><atom:link href="https://fuweid.com/post/index.xml" rel="self" type="application/rss+xml" />
+    <item>
+      <title>Previewing new mount manager in containerd v2.2.0</title>
+      <link>https://fuweid.com/post/2025-containerd-220-mount-manager/</link>
+      <pubDate>Sun, 02 Nov 2025 10:20:45 -0500</pubDate>
+      
+      <guid>https://fuweid.com/post/2025-containerd-220-mount-manager/</guid>
+      <description>延续上一篇文章，在 v2.2.0 版本中最关键的更新是 Mount Manager 的引入。该功能主要用于简化现有 snapshotter 的管理方式，并为后续用户自定义的存储方案提供更灵活的集成能力。在深入介绍之前，我们先回顾一下 snapshotter 在演进过程中存在的问题。
+Mount by Snapshotter ? 最初，snapshotter 的接口设计仅负责管理 snapshot 的生命周期；至于 snapshot 的挂载（mount）动作，则由上层组件自行处理，例如镜像解压插件（diff）或 containerd-shim。该设计的前提是假设 snapshotter 的存储行为足够简单，挂载逻辑完全可以依赖底层文件系统的能力，例如 OverlayFS 的 union mounting 特性。
+From 2017: containerd deep dive presentation at the containerd summit 然而，这一设计基于的前提过于理想化，忽略了更复杂的使用场景，例如文件系统镜像的初始化、底层块设备的动态添加或移除，以及多阶段的挂载流程。真正暴露设计局限的是延迟加载（lazy loading）技术的引入，其次是安全容器（VM-like container）对挂载的需求。
+[v1.4.0] Skip the Prepare phase with a two-stage commit 延迟加载镜像不需要在本地下载完整的镜像层数据，通常只依赖索引信息即可，例如 nydus、overlayBD 或 stargz。为了让 containerd 在延迟加载场景中避免下载原始镜像层数据，snapshotter 采用了两项约定:
+  所有以 containerd.io/snapshot/ 开头的用户自定义标签会被透传到 snapshotter.Prepare 接口。snapshotter 可借助这些标签获取镜像相关信息（具体取决于各自的存储方案）。这些信息可以在镜像构建阶段就写入 OCI 镜像的元数据中，containerd 会自动识别并传递。
+  在 Prepare 阶段，containerd 会传递标签 containerd.</description>
+    </item>
+    
     <item>
       <title>Previewing Rebase Snapshots in containerd v2.2.0</title>
       <link>https://fuweid.com/post/2025-containerd-220-rebase-snapshot/</link>

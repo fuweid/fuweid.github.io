@@ -3,9 +3,82 @@
         <title>Fu, Wei</title>
         <link>https://fuweid.com/</link>
         <copyright>2025 Wei Fu</copyright>
-        <lastBuildDate>Fri, 31 Oct 2025 19:20:45 -0500</lastBuildDate>
+        <lastBuildDate>Sun, 02 Nov 2025 10:20:45 -0500</lastBuildDate>
         <atom:link href="/" rel="self" type="application/rss+xml" />
 
+        
+        <item>
+          <title>Previewing new mount manager in containerd v2.2.0</title>
+          <link>/post/2025-containerd-220-mount-manager/</link>
+          <pubDate>Sun, 02 Nov 2025 10:20:45 -0500</pubDate>
+          <guid>https://fuweid.com/post/2025-containerd-220-mount-manager/</guid>
+          <description>&lt;p&gt;延续上一篇&lt;a href=&#34;https://fuweid.com/post/2025-containerd-220-rebase-snapshot/&#34;&gt;文章&lt;/a&gt;，在 v2.2.0 版本中最关键的更新是 Mount Manager 的引入。该功能主要用于简化现有 snapshotter 的管理方式，并为后续用户自定义的存储方案提供更灵活的集成能力。在深入介绍之前，我们先回顾一下 snapshotter 在演进过程中存在的问题。&lt;/p&gt;
+&lt;h2 id=&#34;mount-by-snapshotter-&#34;&gt;Mount by Snapshotter ?&lt;/h2&gt;
+&lt;p&gt;最初，snapshotter 的接口设计仅负责管理 snapshot 的生命周期；至于 snapshot 的挂载（mount）动作，则由上层组件自行处理，例如镜像解压插件（diff）或 containerd-shim。该设计的前提是假设 snapshotter 的存储行为足够简单，挂载逻辑完全可以依赖底层文件系统的能力，例如 OverlayFS 的 union mounting 特性。&lt;/p&gt;
+&lt;p&gt;&lt;img src=&#34;https://fuweid.com/img/2025-containerd-220-mount-manager/2017-snapshot-api.png&#34; alt=&#34;2017-snapshot-api&#34;&gt;&lt;/p&gt;
+&lt;center&gt;From &lt;a href=&#34;https://youtu.be/UUDDCetB7_A?si=RmpE2Gy_PEW76JKJ&#34; target=&#34;_blank&#34;&gt;2017: containerd deep dive presentation at the containerd summit&lt;/a&gt;&lt;/center&gt;
+&lt;p&gt;然而，这一设计基于的前提过于理想化，忽略了更复杂的使用场景，例如文件系统镜像的初始化、底层块设备的动态添加或移除，以及多阶段的挂载流程。真正暴露设计局限的是延迟加载（lazy loading）技术的引入，其次是安全容器（VM-like container）对挂载的需求。&lt;/p&gt;
+&lt;h3 id=&#34;v140-skip-the-prepare-phase-with-a-two-stage-commit2&#34;&gt;&lt;a href=&#34;https://github.com/containerd/containerd/pull/3793&#34;&gt;[v1.4.0] Skip the Prepare phase with a two-stage commit&lt;/a&gt;&lt;/h3&gt;
+&lt;p&gt;延迟加载镜像不需要在本地下载完整的镜像层数据，通常只依赖索引信息即可，例如 &lt;a href=&#34;https://github.com/dragonflyoss/nydus/blob/master/docs/nydus-image.md&#34;&gt;nydus&lt;/a&gt;、&lt;a href=&#34;https://github.com/containerd/overlaybd&#34;&gt;overlayBD&lt;/a&gt; 或 &lt;a href=&#34;https://github.com/containerd/stargz-snapshotter&#34;&gt;stargz&lt;/a&gt;。为了让 containerd 在延迟加载场景中避免下载原始镜像层数据，snapshotter 采用了&lt;a href=&#34;https://github.com/containerd/containerd/blob/main/docs/remote-snapshotter.md#snapshotter-apis-for-querying-remote-snapshots&#34;&gt;两项约定&lt;/a&gt;:&lt;/p&gt;
+&lt;ol&gt;
+&lt;li&gt;
+&lt;p&gt;所有以 &lt;code&gt;containerd.io/snapshot/&lt;/code&gt; 开头的用户自定义标签会被透传到 &lt;code&gt;snapshotter.Prepare&lt;/code&gt; 接口。snapshotter 可借助这些标签获取镜像相关信息（具体取决于各自的存储方案）。这些信息可以在镜像构建阶段就写入 OCI 镜像的元数据中，containerd 会自动识别并传递。&lt;/p&gt;
+&lt;/li&gt;
+&lt;li&gt;
+&lt;p&gt;在 Prepare 阶段，containerd 会传递标签 &lt;code&gt;containerd.io/snapshot.ref=chainID&lt;/code&gt;。如果自定义 snapshotter 使用延迟加载技术，它可以利用这些标签获取镜像索引数据并完成初始化。此时，snapshotter 应在 Prepare 阶段直接将 snapshot 提交为 Committed 状态，并返回 &lt;code&gt;ErrAlreadyExists&lt;/code&gt;，让 containerd 认为该层已准备就绪，然后继续处理下一个镜像层。&lt;/p&gt;
+&lt;/li&gt;
+&lt;/ol&gt;
+&lt;p&gt;在第二个约定中，自定义 snapshotter 可能会发起 HTTP 或 RPC 请求，从而导致 Prepare 调用耗时较长。而 containerd 底层的元数据存储（metadata plugin）依赖 &lt;a href=&#34;https://github.com/etcd-io/bbolt&#34;&gt;boltdb&lt;/a&gt;，这是一种仅支持单写操作的嵌入式数据库。由于 snapshot 元数据同时由元数据存储和 snapshotter 的双重 boltdb 管理，为避免单个大锁阻塞其他操作，containerd 将 Prepare 阶段的数据提交设计为两步式流程。&lt;/p&gt;
+&lt;blockquote&gt;
+&lt;p&gt;NOTE: 使用双 boltdb 管理的一个好处是，GC 扫描可以以异步方式清理 snapshot，从而避免阻塞其他操作。&lt;/p&gt;
+&lt;/blockquote&gt;
+&lt;p&gt;与 OverlayFS snapshotter 不同，延迟加载类存储必须在 Prepare 阶段提前完成容器根目录挂载所需的初始化。例如，stargz-snapshotter 会在这一阶段启动 FUSE 挂载，而 overlayBD 则通过 &lt;a href=&#34;https://www.kernel.org/doc/Documentation/target/tcmu-design.txt&#34;&gt;TCMU&lt;/a&gt; 初始化 iSCSI 块设备。由于 containerd 在容器启动前只会调用一次 Prepare 来创建可写层，snapshotter 只能利用这个唯一窗口完成初始化 —— 这实际上形成了文档未明确说明的 &lt;strong&gt;「隐含的第三个约定」&lt;/strong&gt; 。&lt;/p&gt;
+&lt;p&gt;但随之出现了新的问题：这些初始化过程中创建的挂载点或设备，应在何时安全清理？&lt;/p&gt;
+&lt;p&gt;容器根目录的最终挂载和清理都由 containerd-shim 完成，而 snapshotter 仅会在 snapshot 被删除时才执行清理。这意味着挂载点或设备可能在容器退出后仍被保留，从而导致清理滞后，甚至引起额外的系统资源占用。&lt;/p&gt;
+&lt;h3 id=&#34;2022-add-new-extraoptions-field&#34;&gt;[2022] Add new ExtraOptions field?&lt;/h3&gt;
+&lt;p&gt;同样，安全容器在启动前也需要执行额外的初始化步骤，仅依靠现有的 snapshotter 接口无法优雅地实现优化。曾经，Kata Containers 社区提出通过 &lt;a href=&#34;https://github.com/containerd/containerd/pull/6746&#34;&gt;ExtraOptions&lt;/a&gt; 将配置信息传递给 Kata-container-shim，但最终被否决。原因很明确：在容器启动前，不仅 containerd-shim 会挂载容器根目录，CRI 插件也需要挂载它以获取进程的 UID/GID。一旦 containerd 无法识别或理解 ExtraOptions，这套方案就无法成立。此外，ExtraOptions 本身也无法表达复杂的初始化逻辑，因此无法满足需求。&lt;/p&gt;
+&lt;blockquote&gt;
+&lt;p&gt;NOTE: ExtraOptions 需求来源于机密计算 - &lt;a href=&#34;https://github.com/confidential-containers/confidential-containers/issues/137&#34;&gt;https://github.com/confidential-containers/confidential-containers/issues/137&lt;/a&gt;&lt;/p&gt;
+&lt;/blockquote&gt;
+&lt;h3 id=&#34;2023-mounthelper-binary&#34;&gt;[2023] mount.helper binary?&lt;/h3&gt;
+&lt;p&gt;在 Darwin 支持开发阶段，Akihiro Suda 曾提出利用 &lt;a href=&#34;https://github.com/containerd/containerd/pull/8789#issuecomment-1687818124&#34;&gt;mount.helper in &amp;ndash; Add support for bind-mounts on Darwin (a.k.a. &amp;ldquo;make native snapshotter work&amp;rdquo;)&lt;/a&gt; 扩展挂载方式，类似 &lt;a href=&#34;https://github.com/containerd/containerd/pull/3765&#34;&gt;mount.fuse&lt;/a&gt;，用于满足第三方挂载需求。虽然该方案解决了「如何执行挂载」的问题，但 mount 本身只是一个代码库而非插件服务，并且没有处理挂载点生命周期管理，因此 snapshotter 的核心问题仍然没有解决。&lt;/p&gt;
+&lt;h3 id=&#34;v210-erofs-snapshotter&#34;&gt;[v2.1.0] EROFS snapshotter&lt;/h3&gt;
+&lt;p&gt;直到上一个版本，新的 &lt;a href=&#34;https://docs.kernel.org/filesystems/erofs.html&#34;&gt;EROFS&lt;/a&gt; 存储支持还是在 Prepare 阶段挂载 loopback 设备。&lt;/p&gt;
+&lt;p&gt;&lt;img src=&#34;https://fuweid.com/img/2025-containerd-220-mount-manager/v2.1.0-erofs.png&#34; alt=&#34;v2.1.4-erofs&#34;&gt;&lt;/p&gt;
+&lt;h2 id=&#34;mount-manager13&#34;&gt;&lt;a href=&#34;https://github.com/containerd/containerd/issues/11303&#34;&gt;Mount Manager&lt;/a&gt;&lt;/h2&gt;
+&lt;p&gt;Derek 在今年年初提出了 Mount Manager 插件。其核心理念是将挂载初始化操作从 snapshotter 中解耦。通过这一插件机制，挂载点的初始化由 &lt;code&gt;Activate&lt;/code&gt; 操作负责完成，而不再依赖 snapshotter 的 &lt;code&gt;Prepare&lt;/code&gt; 阶段。同时，Mount Manager 可以将挂载点的生命周期与其他资源建立引用关系。例如，将挂载点与容器生命周期绑定：当容器退出并被删除时，containerd 的 GC 模块会沿着引用关系自动清理不再需要的挂载点。&lt;/p&gt;
+&lt;div class=&#34;highlight&#34;&gt;&lt;pre class=&#34;chroma&#34;&gt;&lt;code class=&#34;language-go&#34; data-lang=&#34;go&#34;&gt;&lt;span class=&#34;kd&#34;&gt;type&lt;/span&gt; &lt;span class=&#34;nx&#34;&gt;Manager&lt;/span&gt; &lt;span class=&#34;kd&#34;&gt;interface&lt;/span&gt; &lt;span class=&#34;p&#34;&gt;{&lt;/span&gt;
+	&lt;span class=&#34;nf&#34;&gt;Activate&lt;/span&gt;&lt;span class=&#34;p&#34;&gt;(&lt;/span&gt;&lt;span class=&#34;nx&#34;&gt;context&lt;/span&gt;&lt;span class=&#34;p&#34;&gt;.&lt;/span&gt;&lt;span class=&#34;nx&#34;&gt;Context&lt;/span&gt;&lt;span class=&#34;p&#34;&gt;,&lt;/span&gt; &lt;span class=&#34;kt&#34;&gt;string&lt;/span&gt;&lt;span class=&#34;p&#34;&gt;,&lt;/span&gt; &lt;span class=&#34;p&#34;&gt;[]&lt;/span&gt;&lt;span class=&#34;nx&#34;&gt;Mount&lt;/span&gt;&lt;span class=&#34;p&#34;&gt;,&lt;/span&gt; &lt;span class=&#34;o&#34;&gt;...&lt;/span&gt;&lt;span class=&#34;nx&#34;&gt;ActivateOpt&lt;/span&gt;&lt;span class=&#34;p&#34;&gt;)&lt;/span&gt; &lt;span class=&#34;p&#34;&gt;(&lt;/span&gt;&lt;span class=&#34;nx&#34;&gt;ActivationInfo&lt;/span&gt;&lt;span class=&#34;p&#34;&gt;,&lt;/span&gt; &lt;span class=&#34;kt&#34;&gt;error&lt;/span&gt;&lt;span class=&#34;p&#34;&gt;)&lt;/span&gt;
+	&lt;span class=&#34;nf&#34;&gt;Deactivate&lt;/span&gt;&lt;span class=&#34;p&#34;&gt;(&lt;/span&gt;&lt;span class=&#34;nx&#34;&gt;context&lt;/span&gt;&lt;span class=&#34;p&#34;&gt;.&lt;/span&gt;&lt;span class=&#34;nx&#34;&gt;Context&lt;/span&gt;&lt;span class=&#34;p&#34;&gt;,&lt;/span&gt; &lt;span class=&#34;kt&#34;&gt;string&lt;/span&gt;&lt;span class=&#34;p&#34;&gt;)&lt;/span&gt; &lt;span class=&#34;kt&#34;&gt;error&lt;/span&gt;
+	&lt;span class=&#34;nf&#34;&gt;Info&lt;/span&gt;&lt;span class=&#34;p&#34;&gt;(&lt;/span&gt;&lt;span class=&#34;nx&#34;&gt;context&lt;/span&gt;&lt;span class=&#34;p&#34;&gt;.&lt;/span&gt;&lt;span class=&#34;nx&#34;&gt;Context&lt;/span&gt;&lt;span class=&#34;p&#34;&gt;,&lt;/span&gt; &lt;span class=&#34;kt&#34;&gt;string&lt;/span&gt;&lt;span class=&#34;p&#34;&gt;)&lt;/span&gt; &lt;span class=&#34;p&#34;&gt;(&lt;/span&gt;&lt;span class=&#34;nx&#34;&gt;ActivationInfo&lt;/span&gt;&lt;span class=&#34;p&#34;&gt;,&lt;/span&gt; &lt;span class=&#34;kt&#34;&gt;error&lt;/span&gt;&lt;span class=&#34;p&#34;&gt;)&lt;/span&gt;
+	&lt;span class=&#34;nf&#34;&gt;Update&lt;/span&gt;&lt;span class=&#34;p&#34;&gt;(&lt;/span&gt;&lt;span class=&#34;nx&#34;&gt;context&lt;/span&gt;&lt;span class=&#34;p&#34;&gt;.&lt;/span&gt;&lt;span class=&#34;nx&#34;&gt;Context&lt;/span&gt;&lt;span class=&#34;p&#34;&gt;,&lt;/span&gt; &lt;span class=&#34;nx&#34;&gt;ActivationInfo&lt;/span&gt;&lt;span class=&#34;p&#34;&gt;,&lt;/span&gt; &lt;span class=&#34;o&#34;&gt;...&lt;/span&gt;&lt;span class=&#34;kt&#34;&gt;string&lt;/span&gt;&lt;span class=&#34;p&#34;&gt;)&lt;/span&gt; &lt;span class=&#34;p&#34;&gt;(&lt;/span&gt;&lt;span class=&#34;nx&#34;&gt;ActivationInfo&lt;/span&gt;&lt;span class=&#34;p&#34;&gt;,&lt;/span&gt; &lt;span class=&#34;kt&#34;&gt;error&lt;/span&gt;&lt;span class=&#34;p&#34;&gt;)&lt;/span&gt;
+	&lt;span class=&#34;nf&#34;&gt;List&lt;/span&gt;&lt;span class=&#34;p&#34;&gt;(&lt;/span&gt;&lt;span class=&#34;nx&#34;&gt;context&lt;/span&gt;&lt;span class=&#34;p&#34;&gt;.&lt;/span&gt;&lt;span class=&#34;nx&#34;&gt;Context&lt;/span&gt;&lt;span class=&#34;p&#34;&gt;,&lt;/span&gt; &lt;span class=&#34;o&#34;&gt;...&lt;/span&gt;&lt;span class=&#34;kt&#34;&gt;string&lt;/span&gt;&lt;span class=&#34;p&#34;&gt;)&lt;/span&gt; &lt;span class=&#34;p&#34;&gt;([]&lt;/span&gt;&lt;span class=&#34;nx&#34;&gt;ActivationInfo&lt;/span&gt;&lt;span class=&#34;p&#34;&gt;,&lt;/span&gt; &lt;span class=&#34;kt&#34;&gt;error&lt;/span&gt;&lt;span class=&#34;p&#34;&gt;)&lt;/span&gt;
+&lt;span class=&#34;p&#34;&gt;}&lt;/span&gt;
+&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;blockquote&gt;
+&lt;p&gt;NOTE: containerd GC 设计可查看 - &lt;a href=&#34;https://fuweid.com/post/2023-containerd-17-gc/&#34;&gt;https://fuweid.com/post/2023-containerd-17-gc/&lt;/a&gt;.&lt;/p&gt;
+&lt;/blockquote&gt;
+&lt;p&gt;&lt;code&gt;Activate&lt;/code&gt; 会将 snapshotter 管理的挂载信息转换为可以直接用于系统调用的挂载描述。为了支持更灵活的扩展能力，Mount Manager 引入了 Mount Handler 和 Transformer 插件机制。原则上，自定义存储方案只需定义不同的 mount.Type，便可实现独立的挂载初始化逻辑。&lt;/p&gt;
+&lt;p&gt;举个例子，如下图所示。 &lt;code&gt;Activate&lt;/code&gt; 会完成以下三步：&lt;/p&gt;
+&lt;ol&gt;
+&lt;li&gt;
+&lt;p&gt;初始化一个 500 MiB XFS 镜像。&lt;/p&gt;
+&lt;/li&gt;
+&lt;li&gt;
+&lt;p&gt;创建一个 loopback 设备，将其绑定到第一步创建的镜像上，并完成挂载。&lt;/p&gt;
+&lt;/li&gt;
+&lt;li&gt;
+&lt;p&gt;在第二步挂载的基础上，创建 upper 和 worker 目录，并返回一个 OverlayFS 挂载信息。&lt;/p&gt;
+&lt;/li&gt;
+&lt;/ol&gt;
+&lt;p&gt;&lt;img src=&#34;https://fuweid.com/img/2025-containerd-220-mount-manager/mount-example.png&#34; alt=&#34;mount-example&#34;&gt;&lt;/p&gt;
+&lt;p&gt;内置的 Mount Handler 和 Transformer 通过 Go Template 实现链式初始化过程中信息的共享。引入的概念较多，有兴趣的朋友可以参考文档：&lt;a href=&#34;https://github.com/containerd/containerd/blob/v2.2.0-rc.0/docs/mounts.md#mount-management&#34;&gt;mounts.md&lt;/a&gt;。&lt;/p&gt;
+&lt;h2 id=&#34;new-intergration--v230&#34;&gt;New intergration &amp;gt;= v2.3.0&lt;/h2&gt;
+&lt;p&gt;v2.2.0 版本仅引入了 Mount Manager，目前只有 EROFS snapshotter 集成了这一方案（它现在不再在 snapshotter 内部处理任何挂载操作）。此外，Mount Manager 还未开放 Mount Handler 插件 (proxy) 接口，第三方组件的调用方式计划在下一版本中引入。&lt;/p&gt;
+&lt;p&gt;可以预见，未来 snapshotter 将更多聚焦于元数据管理，逐步回归其最初的设计定位。而 Mount Manager 则可能成为存储管理的新趋势——它将更加贴近容器运行时，尤其在安全容器的设计中，其作用会愈发明显。&lt;/p&gt;
+&lt;h2 id=&#34;note&#34;&gt;NOTE&lt;/h2&gt;
+&lt;p&gt;Mount Manager 的运行同样依赖 boltdb 来管理状态，但要求该数据库运行在 tmpfs 上。如果有人将 containerd 的 state 目录配置在持久化存储中，containerd 初始化时将会失败。通常，社区建议将 state 目录（临时数据）放置在 &lt;code&gt;/run&lt;/code&gt; 等 tmpfs 路径下。&lt;/p&gt;
+</description>
+        </item>
         
         <item>
           <title>Previewing Rebase Snapshots in containerd v2.2.0</title>
