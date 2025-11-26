@@ -5,7 +5,17 @@
     <link>https://fuweid.com/post/</link>
     <description>Recent content in Posts on Fu, Wei</description>
     <generator>Hugo -- gohugo.io</generator>
-    <lastBuildDate>Sun, 02 Nov 2025 10:20:45 -0500</lastBuildDate><atom:link href="https://fuweid.com/post/index.xml" rel="self" type="application/rss+xml" />
+    <lastBuildDate>Tue, 25 Nov 2025 21:20:45 -0500</lastBuildDate><atom:link href="https://fuweid.com/post/index.xml" rel="self" type="application/rss+xml" />
+    <item>
+      <title>Debug Log #2: Using AI to Fix a Flaky Containerd ENXIO Test Case</title>
+      <link>https://fuweid.com/post/2025-debug-02-ai-loopback-enxio-flaky-testcase/</link>
+      <pubDate>Tue, 25 Nov 2025 21:20:45 -0500</pubDate>
+      
+      <guid>https://fuweid.com/post/2025-debug-02-ai-loopback-enxio-flaky-testcase/</guid>
+      <description>ENXIO: no such device or address 在 containerd v2.2 发布前期，我们多次遇到与 loop(4) 块设备相关的测试用例 TestLoopbackMount 出现不稳定的问题，但在本地环境却始终无法复现。我在审阅代码时碰到这种失败的频率并不高，重试一下通常就能通过，所以当时并没有太在意。直到最近我连续点了好几次重试之后，我真的不想再当 S(oftware) R(etry) E(ngineer) 了。
+=== FAIL: core/mount/manager TestLoopbackMount (0.05s) log_hook.go:47: time=&amp;#34;2025-10-23T21:49:22.532811960Z&amp;#34; level=debug msg=&amp;#34;activating mount&amp;#34; func=&amp;#34;manager.(*mountManager).Activate&amp;#34; file=&amp;#34;/home/runner/work/containerd/containerd/core/mount/manager/manager.go:134&amp;#34; mounts=&amp;#34;[{loop /tmp/TestLoopbackMount989607109/001/fs-1621892597 []} {format/ext4 {{ mount 0 }} []}]&amp;#34; name=id1 testcase=TestLoopbackMount helpers.go:100: unmount /tmp/TestLoopbackMount989607109/001/test-mount-3030342351 manager_linux_test.go:80: Error Trace:	/home/runner/work/containerd/containerd/core/mount/manager/manager_linux_test.go:80 /home/runner/work/containerd/containerd/core/mount/manager/manager_linux_test.go:105 Error: Received unexpected error: failed to get loop device info: no such device or address Test: TestLoopbackMount TestLoopbackMount 在真实的生产环境里，基本不会有人用 loop 设备当存储后端。不过在测试环境就不一样了，总不能为了跑几条测试就给 CI runner 挂一块 NVMe 盘吧。containerd 在这里其实只负责 snapshot 的生命周期管理，真正的差异主要来自不同文件系统的实现。所以，用 loop 设备来跑测试已经足够覆盖这部分逻辑，也是最简单直接的方案。</description>
+    </item>
+    
     <item>
       <title>Previewing new mount manager in containerd v2.2.0</title>
       <link>https://fuweid.com/post/2025-containerd-220-mount-manager/</link>

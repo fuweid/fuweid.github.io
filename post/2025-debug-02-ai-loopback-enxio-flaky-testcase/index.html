@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html>
+    <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+    <title>
+        
+            Fu, Wei: Debug Log #2: Using AI to Fix a Flaky Containerd ENXIO Test Case
+        
+    </title>
+
+    <meta property="og:title" content="Debug Log #2: Using AI to Fix a Flaky Containerd ENXIO Test Case"/>
+    <meta property="og:Section" content="website"/>
+    <meta property="og:url" content="https://fuweid.com/post/2025-debug-02-ai-loopback-enxio-flaky-testcase/"/>
+    <meta property="og:image" content="https://fuweid.com/favicon.jpg"/>
+    <meta property="og:site_name" content="Fu, Wei"/>
+    <meta property="og:description" content=""/>
+
+    <meta name="twitter:card" content="summary_large_image"></meta>
+    <meta name="twitter:title" content="Debug Log #2: Using AI to Fix a Flaky Containerd ENXIO Test Case"></meta>
+    <meta name="twitter:site_name" content="Fu, Wei"></meta>
+    <meta name="twitter:url" content="https://fuweid.com/post/2025-debug-02-ai-loopback-enxio-flaky-testcase/"></meta>
+    <meta name="twitter:image" content="https://fuweid.com/favicon.jpg"></meta>
+    <meta name="twitter:description" content=""></meta>
+    <meta name="twitter:domain" content="fuweid.com"></meta>
+
+    <link rel="stylesheet" href="/css/fontawesome/all.css" />
+    <link rel="stylesheet" href="/css/main.css" /> 
+    <link rel="stylesheet" href="/css/normalize.css">
+    <link rel="stylesheet" href="/css/prettify.css">
+    <link rel="shortcut icon" href="https://fuweid.com/favicon.jpg">
+    <link rel="icon" href="https://fuweid.com/favicon.jpg">
+    <script type="text/javascript" src="/js/prettify.js"></script>
+</head>
+
+
+    <body onload="doPrettify()">
+        <header>
+    <nav>
+        <ul class="home">
+            <li>
+                <a href="https://fuweid.com/">Fu, Wei</a>
+            </li>
+        </ul>
+        <ul class="social">
+            <li>
+                <a class="fab fa-github" href="https://github.com/fuweid" target="_blank"></a>
+            </li>
+            <li>
+                <a class="fab fa-twitter" href="https://twitter.com/fuweid89" target="_blank"></a>
+            </li>
+            <li>
+                <a class="fas fa-rss" href="https://fuweid.com//index.xml" target="_blank"></a>
+            </li>
+        </ul>
+    </nav>
+</header>
+
+
+        <div class="container">
+            <article class="single">
+                <h1 class="title"> Debug Log #2: Using AI to Fix a Flaky Containerd ENXIO Test Case </h1>
+                <h4 class="time"> November 25, 2025 </h4>
+                <h2 id="enxio-no-such-device-or-address">ENXIO: no such device or address</h2>
+<p>在 containerd v2.2 发布前期，我们多次遇到与 <a href="https://man7.org/linux/man-pages/man4/loop.4.html">loop(4)</a> 块设备相关的测试用例 TestLoopbackMount 出现不稳定的问题，但在本地环境却始终无法复现。我在审阅代码时碰到这种失败的频率并不高，重试一下通常就能通过，所以当时并没有太在意。直到最近我连续点了好几次重试之后，我真的不想再当 S(oftware) R(etry) E(ngineer) 了。</p>
+<div class="highlight"><pre class="chroma"><code class="language-bash" data-lang="bash"><span class="o">===</span> FAIL: core/mount/manager TestLoopbackMount <span class="o">(</span>0.05s<span class="o">)</span>
+    log_hook.go:47: <span class="nv">time</span><span class="o">=</span><span class="s2">&#34;2025-10-23T21:49:22.532811960Z&#34;</span> <span class="nv">level</span><span class="o">=</span>debug <span class="nv">msg</span><span class="o">=</span><span class="s2">&#34;activating mount&#34;</span> <span class="nv">func</span><span class="o">=</span><span class="s2">&#34;manager.(*mountManager).Activate&#34;</span> <span class="nv">file</span><span class="o">=</span><span class="s2">&#34;/home/runner/work/containerd/containerd/core/mount/manager/manager.go:134&#34;</span> <span class="nv">mounts</span><span class="o">=</span><span class="s2">&#34;[{loop /tmp/TestLoopbackMount989607109/001/fs-1621892597  []} {format/ext4 {{ mount 0 }}  []}]&#34;</span> <span class="nv">name</span><span class="o">=</span>id1 <span class="nv">testcase</span><span class="o">=</span>TestLoopbackMount
+    helpers.go:100: unmount /tmp/TestLoopbackMount989607109/001/test-mount-3030342351
+    manager_linux_test.go:80:
+        	Error Trace:	/home/runner/work/containerd/containerd/core/mount/manager/manager_linux_test.go:80
+        	            				/home/runner/work/containerd/containerd/core/mount/manager/manager_linux_test.go:105
+        	Error:      	Received unexpected error:
+        	            	failed to get loop device info: no such device or address
+        	Test:       	TestLoopbackMount
+</code></pre></div><h2 id="testloopbackmount">TestLoopbackMount</h2>
+<p>在真实的生产环境里，基本不会有人用 loop 设备当存储后端。不过在测试环境就不一样了，总不能为了跑几条测试就给 CI runner 挂一块 NVMe 盘吧。containerd 在这里其实只负责 snapshot 的生命周期管理，真正的差异主要来自不同文件系统的实现。所以，用 loop 设备来跑测试已经足够覆盖这部分逻辑，也是最简单直接的方案。</p>
+<p>containerd v2.2 将 loop 设备挂载抽象成 mount manager 的插件，挂载流程相对简单：</p>
+<table>
+<thead>
+<tr>
+<th>步骤</th>
+<th>操作</th>
+<th>说明</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1</td>
+<td><a href="https://man7.org/linux/man-pages/man2/ioctl.2.html">ioctl(2)</a> + <code>LOOP_CTL_GET_FREE</code> 获取 <code>/dev/loopX</code></td>
+<td>找到一个可用的 loop 设备</td>
+</tr>
+<tr>
+<td>2</td>
+<td><code>ioctl</code> + <code>LOOP_CONFIGURE(后端文件 + LO_FLAGS_AUTOCLEAR)</code></td>
+<td>绑定文件并设置自动清理标志</td>
+</tr>
+<tr>
+<td>3</td>
+<td>创建 <code>/dev/loopX</code> 的软链接</td>
+<td>方便管理，重启后仍能通过软链接找到设备</td>
+</tr>
+<tr>
+<td>4</td>
+<td>取消 <code>LO_FLAGS_AUTOCLEAR</code></td>
+<td>允许 containerd 重启或其他进程重新挂载该设备</td>
+</tr>
+<tr>
+<td>5</td>
+<td>挂载</td>
+<td>将 loop 设备挂载到目标路径</td>
+</tr>
+<tr>
+<td>6</td>
+<td>取消挂载</td>
+<td>卸载 loop 设备</td>
+</tr>
+<tr>
+<td>7</td>
+<td>打开 <code>/dev/loopX</code> 并重新设置 <code>LO_FLAGS_AUTOCLEAR</code></td>
+<td>确保设备在关闭句柄后自动释放</td>
+</tr>
+<tr>
+<td>8</td>
+<td>关闭 <code>/dev/loopX</code> 句柄</td>
+<td>完成释放流程</td>
+</tr>
+</tbody>
+</table>
+<p>第 3、4 步主要用于简化管理，确保 containerd 重启后，loop 设备的后端文件不会被意外清空，同时通过软链接方便找到设备号。</p>
+<p>即使多个进程同时通过 <code>LOOP_CTL_GET_FREE</code> 获取相同的可用设备号，内核在绑定后端文件时会加锁，确保只有一个进程成功绑定。其他进程会收到 <code>EBUSY</code> 错误，它们只需重新获取设备号即可。重试逻辑和现有的 <a href="https://man7.org/linux/man-pages/man8/losetup.8.html">losetup(8)</a> 保持一致。</p>
+<p>但是在第 7 步，TestLoopbackMount 出现了错误。当它尝试获取设备配置信息时，内核返回了 ENXIO。这个错误表示该设备没有绑定任何后端，因此无法获取状态。</p>
+<p>在确认内核锁能够保证不会出现并发问题后，可以断定，错误原因是其他进程调用了 ioctl(LOOP_CLR_FD) 来清理了「错误」设备号。</p>
+<h2 id="using-ai">Using AI?</h2>
+<p>最直接的方法就是启动一个 Vagrant Box，运行和 CI 环境一模一样的内核版本，然后不停地跑测试；同时写一个小的 eBPF 程序来监控所有的 ioctl 系统调用。只要能复现问题，就可以通过 eBPF 的输出追踪到到底是谁在操作设备。不过准备环境需要做的事情不少：</p>
+<ul>
+<li>
+<p>下载 Ubuntu 22.04 镜像，安装对应的 Azure Ubuntu 版本，以及 llvm、libbpf 等依赖工具，光这些就至少要 20 分钟；</p>
+</li>
+<li>
+<p>让 AI 写一个监控 ioctl 的 eBPF 程序，简单调试保证没有问题，也至少需要 5-10 分钟。</p>
+</li>
+</ul>
+<p>算下来，整个过程至少也得半小时以上。上周日我在家看 PGL Wallachia S6 - Dota 2 决赛，MOUZ 对雪碧战队，比赛挺精彩的，不想错过 BP 时间，所以就放弃了这个方案。于是，在中间休息的时候，我问了问 AI，看看是不是内部还有其他测试用例在干扰。</p>
+<h2 id="好像对了">好像对了？</h2>
+<p>根据我过往的经验，如果当甩手掌柜，直接让 AI 去搞定环境跑这种级别的测试，大概率它会迷失在各种奇葩的错误里。加上我也不确定是不是有其他的测试干扰了，我就只是让 Claude Code 去根据我的问题来生成 Plan。</p>
+<p>没有意外，第一次的答复永远都是让我改现有逻辑来容忍这个错误。</p>
+<p><img src="/img/2025-debug-02-AI-loopback-enxio-flaky-testcase/suggestion-1.png" alt="suggestion"></p>
+<p>我通过两次纠正，并把 loop(4) 的内核文档链接发给它后，Claude Code 居然帮我找到了那个干扰项 —— TestAutoclearTrueLoop。</p>
+<p><img src="/img/2025-debug-02-AI-loopback-enxio-flaky-testcase/race-condition.png" alt="race-condition"></p>
+<p>在 TestAutoclearTrueLoop 测试里，只要把设备句柄关闭，内核就会自动解除设备背后的后端文件，不需要手动调用 LOOP_CLR_FD。由于多个进程同时申请设备，假设当 TestAutoclearTrueLoop 通过关闭句柄释放了设备 X 后，其他进程就可以获取到这个设备 X。如果此时 TestAutoclearTrueLoop 再调用 LOOP_CLR_FD 去释放这个设备，就可能会影响到其他进程的操作。</p>
+<p>不过，Claude Code 的分析有点离谱。我倒是挺好奇，它到底是以什么概率「选出」这段既胡扯又好像有点道理的分析的。</p>
+<p>最终花费了我 5 分钟 - 3.4k tokens，还不错，没有影响看比赛。</p>
+
+            </article>
+        </div>
+
+        <footer>
+    &copy; 2025 Fu Wei
+</footer>
+
+<script>
+    function doPrettify(){
+        pres=document.getElementsByTagName('pre');
+        for (i=0; i < pres.length; i++) {
+            pres[i].className+=" prettyprint";
+        }
+        prettyPrint();
+    }
+</script>
+
+
+<script async src="https://www.googletagmanager.com/gtag/js?id=G-1C7VLVHN52"></script>
+<script>
+  window.dataLayer = window.dataLayer || [];
+  function gtag(){dataLayer.push(arguments);}
+  gtag('js', new Date());
+
+  gtag('config', 'G-1C7VLVHN52');
+</script>
+
+    </body>
+</html>
