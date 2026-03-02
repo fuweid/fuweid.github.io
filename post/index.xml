@@ -5,7 +5,20 @@
     <link>https://fuweid.com/post/</link>
     <description>Recent content in Posts on Fu, Wei</description>
     <generator>Hugo -- gohugo.io</generator>
-    <lastBuildDate>Sun, 15 Feb 2026 23:28:45 -0500</lastBuildDate><atom:link href="https://fuweid.com/post/index.xml" rel="self" type="application/rss+xml" />
+    <lastBuildDate>Sun, 01 Mar 2026 10:20:45 -0500</lastBuildDate><atom:link href="https://fuweid.com/post/index.xml" rel="self" type="application/rss+xml" />
+    <item>
+      <title>Debug Log #3: Stale reads caused by process pausing</title>
+      <link>https://fuweid.com/post/2026-debug-03-etcd-stale-readindex/</link>
+      <pubDate>Sun, 01 Mar 2026 10:20:45 -0500</pubDate>
+      
+      <guid>https://fuweid.com/post/2026-debug-03-etcd-stale-readindex/</guid>
+      <description>今天分享的问题是 Stale reads caused by process pausing，它由 SIG-ETCD Leader Marek Siarkowicz 完成定位并修复。
+问题介绍 社区每天都会运行 antithesis 的故障注入测试。整体流程是：先启动一个三节点的 etcd 集群，再启动多个客户端并发执行读写；在读写过程中，antithesis 平台会随机注入短暂故障。待客户端操作结束后，测试会对结果进行数据一致性校验，其中一项关键检查就是 Linearizability - 线性一致性。线性一致性校验方面，社区使用 porcupine 的可视化方法：客户端会记录每一次请求的返回结果，以及请求发出与响应返回的时序，呈现出来的效果如下。
+测试会随机暂停某个 etcd 成员进程 2-3 秒（例如通过 cgroup freeze，或对进程发送 SIGSTOP）。问题在于：当原 Leader 暂停恢复后、但尚未意识到已选出新 Leader 之前，它仍可继续处理线性一致性读请求。如上图所示，某客户端已经成功将值更新为 key6=4，并观察到集群的 Revision 为 4；但随后另一个客户端发起读请求时，却读到了 Revision 为 3 的旧数据。这就出现了数据不一致的问题。这种进程停顿在实际场景中还挺常见的，比如底层物理机出现问题需要迁移虚拟机，这种迁移可能会导致短暂的停顿。
+ReadIndex 为了实现线性一致性的读操作，etcd 采用 ReadIndex 机制 ( Raft - 6.4 Processing read-only queries more efficiently )：当 Leader 收到线性一致读请求时，它不会直接用本地状态返回，而是先通过一次广播心跳来确认自己仍然是 Leader，从而避免在发生 Leader 变更或网络故障时读到过期数据。
+Leader 发起一轮 ReadIndex 流程，向其他节点发送心跳（本质是空的 AppendEntries）。这些心跳会携带一个 Request-ID 作为上下文，用来标识这次 ReadIndex 请求。Follower 不需要解析这个上下文，只需按 Raft 协议正常响应心跳即可。Leader 收到多数派的确认后，就能确定一个安全的 readIndex（对应当时已经被多数派确认的提交进度）。</description>
+    </item>
+    
     <item>
       <title>弗吉尼亚, 2025</title>
       <link>https://fuweid.com/post/2026-my-2025-in-va/</link>

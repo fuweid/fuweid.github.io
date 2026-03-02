@@ -1,0 +1,234 @@
+<!DOCTYPE html>
+<html>
+    <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+    <title>
+        
+            Fu, Wei: Debug Log #3: Stale reads caused by process pausing
+        
+    </title>
+
+    <meta property="og:title" content="Debug Log #3: Stale reads caused by process pausing"/>
+    <meta property="og:Section" content="website"/>
+    <meta property="og:url" content="https://fuweid.com/post/2026-debug-03-etcd-stale-readindex/"/>
+    <meta property="og:image" content="https://fuweid.com/favicon.jpg"/>
+    <meta property="og:site_name" content="Fu, Wei"/>
+    <meta property="og:description" content=""/>
+
+    <meta name="twitter:card" content="summary_large_image"></meta>
+    <meta name="twitter:title" content="Debug Log #3: Stale reads caused by process pausing"></meta>
+    <meta name="twitter:site_name" content="Fu, Wei"></meta>
+    <meta name="twitter:url" content="https://fuweid.com/post/2026-debug-03-etcd-stale-readindex/"></meta>
+    <meta name="twitter:image" content="https://fuweid.com/favicon.jpg"></meta>
+    <meta name="twitter:description" content=""></meta>
+    <meta name="twitter:domain" content="fuweid.com"></meta>
+
+    <link rel="stylesheet" href="/css/fontawesome/all.css" />
+    <link rel="stylesheet" href="/css/main.css" /> 
+    <link rel="stylesheet" href="/css/normalize.css">
+    <link rel="stylesheet" href="/css/prettify.css">
+    <link rel="shortcut icon" href="https://fuweid.com/favicon.jpg">
+    <link rel="icon" href="https://fuweid.com/favicon.jpg">
+    <script type="text/javascript" src="/js/prettify.js"></script>
+</head>
+
+
+    <body onload="doPrettify()">
+        <header>
+    <nav>
+        <ul class="home">
+            <li>
+                <a href="https://fuweid.com/">Fu, Wei</a>
+            </li>
+        </ul>
+        <ul class="social">
+            <li>
+                <a class="fab fa-github" href="https://github.com/fuweid" target="_blank"></a>
+            </li>
+            <li>
+                <a class="fab fa-twitter" href="https://twitter.com/fuweid89" target="_blank"></a>
+            </li>
+            <li>
+                <a class="fas fa-rss" href="https://fuweid.com//index.xml" target="_blank"></a>
+            </li>
+        </ul>
+    </nav>
+</header>
+
+
+        <div class="container">
+            <article class="single">
+                <h1 class="title"> Debug Log #3: Stale reads caused by process pausing </h1>
+                <h4 class="time"> March 1, 2026 </h4>
+                <p>今天分享的问题是 <a href="https://github.com/etcd-io/etcd/issues/20418">Stale reads caused by process pausing</a>，它由 SIG-ETCD Leader <a href="https://github.com/serathius">Marek Siarkowicz</a> 完成定位并修复。</p>
+<h2 id="问题介绍">问题介绍</h2>
+<p>社区每天都会运行 <a href="https://antithesis.com/">antithesis</a> 的故障注入测试。整体流程是：先启动一个三节点的 etcd 集群，再启动多个客户端并发执行读写；在读写过程中，antithesis 平台会随机注入短暂故障。待客户端操作结束后，测试会对结果进行数据一致性校验，其中一项关键检查就是 Linearizability - 线性一致性。线性一致性校验方面，社区使用 <a href="https://github.com/anishathalye/porcupine">porcupine</a> 的可视化方法：客户端会记录每一次请求的返回结果，以及请求发出与响应返回的时序，呈现出来的效果如下。</p>
+<p><img src="/img/2026-debug-03-etcd-stale-readindex/porcupine-1.png" alt="porcupine-1"></p>
+<p>测试会随机暂停某个 etcd 成员进程 2-3 秒（例如通过 cgroup freeze，或对进程发送 SIGSTOP）。问题在于：当原 Leader 暂停恢复后、但尚未意识到已选出新 Leader 之前，它仍可继续处理线性一致性读请求。如上图所示，某客户端已经成功将值更新为 <code>key6=4</code>，并观察到集群的 Revision 为 <code>4</code>；但随后另一个客户端发起读请求时，却读到了 Revision 为 <code>3</code> 的旧数据。这就出现了数据不一致的问题。这种进程停顿在实际场景中还挺常见的，比如底层物理机出现问题需要迁移虚拟机，这种迁移可能会导致短暂的停顿。</p>
+<h2 id="readindex">ReadIndex</h2>
+<p>为了实现线性一致性的读操作，etcd 采用 ReadIndex 机制 ( Raft - 6.4 Processing read-only queries more efficiently )：当 Leader 收到线性一致读请求时，它不会直接用本地状态返回，而是先通过一次广播心跳来确认自己仍然是 Leader，从而避免在发生 Leader 变更或网络故障时读到过期数据。</p>
+<p>Leader 发起一轮 ReadIndex 流程，向其他节点发送心跳（本质是空的 AppendEntries）。这些心跳会携带一个 Request-ID 作为上下文，用来标识这次 ReadIndex 请求。Follower 不需要解析这个上下文，只需按 Raft 协议正常响应心跳即可。Leader 收到多数派的确认后，就能确定一个安全的 readIndex（对应当时已经被多数派确认的提交进度）。</p>
+<p>etcd Leader 在管理 ReadIndex 这件事时，思路其实很直接: 用 Request-ID 作为这次请求的唯一标识，然后按照请求进入流程的先后顺序排队，也就是入队 <a href="https://github.com/etcd-io/raft/blob/4f13735b20be5421ee0ff7dde7cb8b8330880576/read_only.go#L52C1-L63C2">readIndexQueue</a>。等收到 Follower 回来的心跳响应之后，如果心跳上下文里的 Request-ID 已经拿到了多数派确认，那有意思的地方就来了: etcd Leader 并不是「哪个请求确认了，就只处理哪个请求」。它 <a href="https://github.com/etcd-io/raft/blob/4f13735b20be5421ee0ff7dde7cb8b8330880576/read_only.go#L81">advance</a> 函数会从队头开始扫描 readIndexQueue，一直处理到这个 Request-ID 为止。也就是说，<strong>一旦某个请求得到确认，那排在它前面的那些请求，它都会可以顺带确认了</strong>。</p>
+<p>每个 etcd 成员都有一个名为 <a href="https://github.com/etcd-io/etcd/blob/95e304269f9bfa466930fbd96c16cf8f04ea5e41/server/etcdserver/v3_server.go#L805">linearizableReadLoop</a> 的守护协程，用来发起 ReadIndex 请求，从而确认当前最新、已达成共识的 CommitIndex。每次请求的超时大约是 7 秒。除非等待超时，或节点检测到 Leader 发生变化，否则它不会放弃这次请求，而是每隔 500 毫秒使用 <strong>同一个 request ID</strong> 继续重试。</p>
+<h2 id="迟到的双心跳反馈">迟到的双心跳反馈</h2>
+<p>假设三个成员分别是 etcd0、etcd1、etcd2，当前 Leader 是 <code>etcd0(term=2)</code>。</p>
+<p>在停止 etcd0 进程之前，etcd1 收到来自 client1 的线性读请求，于是向 Leader etcd0 发送 <code>ReadIndex(reqID=10)</code>。同时，etcd0 对外发送心跳 <code>Heartbeat(term=2, context=[reqID=10])</code>，紧接着 etcd0 被暂停。</p>
+<p>etcd1/etcd2 收到心跳后，分别返回 <code>HeartbeatResp(term=2, context=[reqID=10])</code>。但 etcd1 一直没有等到 etcd0 返回的 <code>MsgReadIndexResp</code>，因此它会继续重试：不断发送同一个 <code>ReadIndex(reqID=10)</code>，直到它发现集群已经出现新 Leader <code>etcd2(term=3)</code>。</p>
+<p>由于数据量不大、机器也没死，<strong>暂停期间内核仍在收包</strong>；再加上暂停时间并不长，etcd0 恢复后仍能收到暂停期间积压的消息：<code>HeartbeatResp(term=2, context=[reqID=10], from=etcd1)</code>、后续重试的 <code>ReadIndex(reqID=10)</code>，以及 <code>HeartbeatResp(term=2, context=[reqID=10], from=etcd2)</code>。可以确定的是：etcd1 的重试 <code>ReadIndex(reqID=10)</code> 一定发生在它发送 <code>HeartbeatResp(term=2, context=[reqID=10], from=etcd1)</code> 之后；但 etcd0 恢复后，协程调度时间不确定，所以不确定 <code>HeartbeatResp(term=2, context=[reqID=10], from=etcd2)</code> 和 <code>ReadIndex(reqID=10)</code> 的顺序。</p>
+<p>假设 etcd0 恢复后，又收到了 client2 一个直接发给它自己的线性读请求，那么它会产生新的 <code>ReadIndex(reqID=20)</code>，并向其它两个成员发起新一轮心跳来等待多数派的确认。由于 etcd0 和其它成员之间的连接并没有断开，新一轮心跳的回包在「发生时间」上肯定晚于上一轮 term=2 的回包。如果此时 readIndexQueue 的顺序刚好变成 <code>[reqID=20, reqID=10]</code>，那么当 etcd0 处理到 <code>HeartbeatResp(term=2, context=[reqID=10], from=etcd2)</code> 时，就可能错误地确认队头的 <code>reqID=20</code>。于是 client2 会直接在 etcd0 本地完成线性读；一旦新 Leader <code>etcd2(term=3)</code> 产生新的数据变化，那么 client2 就会读到旧 Revision，从而形成 stale read。</p>
+<table>
+<thead>
+<tr>
+<th>时间</th>
+<th>发送方 → 接收方</th>
+<th>消息 / 动作</th>
+<th>Term</th>
+<th>备注</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>T0</td>
+<td>—</td>
+<td>etcd0 是 Leader</td>
+<td>2</td>
+<td>初始状态</td>
+</tr>
+<tr>
+<td>T1</td>
+<td>client1 → etcd1</td>
+<td>线性读触发</td>
+<td>2</td>
+<td></td>
+</tr>
+<tr>
+<td>T2</td>
+<td>etcd1 → etcd0</td>
+<td>ReadIndex(reqID=10)</td>
+<td>2</td>
+<td></td>
+</tr>
+<tr>
+<td>T3</td>
+<td>etcd0 → etcd1/etcd2</td>
+<td>Heartbeat(context=[reqID=10])</td>
+<td>2</td>
+<td></td>
+</tr>
+<tr>
+<td>T4</td>
+<td>—</td>
+<td>etcd0 被暂停 (SIGSTOP / freezer)</td>
+<td>2</td>
+<td>用户态不处理消息，但内核仍在收包</td>
+</tr>
+<tr>
+<td>T5</td>
+<td>etcd1/etcd2 → etcd0</td>
+<td>HeartbeatResp(context=[reqID=10])</td>
+<td>2</td>
+<td></td>
+</tr>
+<tr>
+<td>T6</td>
+<td>etcd1 → etcd0</td>
+<td>ReadIndex(reqID=10)</td>
+<td>2</td>
+<td>重试</td>
+</tr>
+<tr>
+<td>T7</td>
+<td>etcd2 成为新 Leader</td>
+<td>Leader 切换</td>
+<td>3</td>
+<td></td>
+</tr>
+<tr>
+<td>T8</td>
+<td>—</td>
+<td>etcd0 恢复</td>
+<td>2/3</td>
+<td></td>
+</tr>
+<tr>
+<td>T9</td>
+<td>client2 → etcd0</td>
+<td>线性读触发</td>
+<td>2/3</td>
+<td></td>
+</tr>
+<tr>
+<td>T10</td>
+<td>etcd0 → etcd1/etcd2</td>
+<td>Heartbeat(context=[reqID=20])</td>
+<td>2/3</td>
+<td>为 reqID=20 等待多数派确认</td>
+</tr>
+<tr>
+<td>T11</td>
+<td>etcd0</td>
+<td>处理 Heartbeat(context=[reqID=10],from=etcd1)</td>
+<td>2/3</td>
+<td></td>
+</tr>
+<tr>
+<td>T12</td>
+<td>etcd0</td>
+<td>处理重复的 ReadIndex(reqID=10,from=etcd1)</td>
+<td>2/3</td>
+<td></td>
+</tr>
+<tr>
+<td>T13</td>
+<td>etcd0</td>
+<td>处理迟到的 Heartbeat(context=[reqID=10],from=etcd2)</td>
+<td>2/3</td>
+<td>确认 T10 - ReadIndex(reqID=20) 的请求</td>
+</tr>
+<tr>
+<td>T14</td>
+<td>etcd0</td>
+<td>client2 读本地状态机</td>
+<td>2/3</td>
+<td>若 etcd2(term3) 有新的数据变化 → stale read</td>
+</tr>
+</tbody>
+</table>
+<p>解决的方案就是避免在 linearizableReadLoop 守护协程里使用重复的 Request-ID。</p>
+<h2 id="最后">最后</h2>
+<p>为了避免先入为主，在查看修复代码之前，我会先过一遍测试日志和关键路径源码，先把可能原因收敛到一个大致范围，再回头对照修复方案。</p>
+<p>这次排查给我带来灵感的是十年前的一条审阅评论——<a href="https://github.com/etcd-io/etcd/pull/6275#discussion_r78322406">raft: support safe readonly request</a>。虽然和这次问题不算直接相关，但这确实是调试的乐趣。</p>
+<p><img src="/img/2026-debug-03-etcd-stale-readindex/review-comment.png" alt="review-comment"></p>
+<p>最后我在本地用 SIGSTOP 跑了几个小时就把问题复现出来了。这次没有用 AI，不过后续可以整理一个 SKILL，用来更系统地分析这类测试日志。</p>
+
+            </article>
+        </div>
+
+        <footer>
+    &copy; 2026 Fu Wei
+</footer>
+
+<script>
+    function doPrettify(){
+        pres=document.getElementsByTagName('pre');
+        for (i=0; i < pres.length; i++) {
+            pres[i].className+=" prettyprint";
+        }
+        prettyPrint();
+    }
+</script>
+
+
+<script async src="https://www.googletagmanager.com/gtag/js?id=G-1C7VLVHN52"></script>
+<script>
+  window.dataLayer = window.dataLayer || [];
+  function gtag(){dataLayer.push(arguments);}
+  gtag('js', new Date());
+
+  gtag('config', 'G-1C7VLVHN52');
+</script>
+
+    </body>
+</html>
