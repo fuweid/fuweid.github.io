@@ -1,0 +1,159 @@
+/* wider than the text, like the images of a post */
+#roadtrip-map {
+    display: block;
+    position: relative;
+    left: 50%;
+    transform: translateX(-50%);
+    width: min(1200px, calc(100vw - 2 * var(--gutter)));
+    margin: 30px 0px;
+}
+
+.roadtrip-sources {
+    color: #767676;
+    font-size: 13px;
+    line-height: 1.6;
+}
+
+.roadtrip-sources a {
+    color: inherit;
+    text-decoration: underline;
+}
+
+#roadtrip-controls {
+    font-size: 16px;
+    /* Reserve space for the reset button. */
+    min-height: 1.8em;
+}
+
+#roadtrip-hint {
+    color: #767676;
+}
+
+#roadtrip-reset {
+    margin-right: 10px;
+    cursor: pointer;
+}
+
+#roadtrip-county:empty {
+    display: none;
+}
+
+#roadtrip-county.tooltip {
+    position: fixed;
+    z-index: 10;
+    box-sizing: border-box;
+    width: max-content;
+    max-width: min(320px, calc(100vw - 16px));
+    padding: 6px 10px;
+    border-radius: 4px;
+    background: #303842;
+    color: #ffffff;
+    line-height: 1.4;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+    pointer-events: none;
+}
+
+.states path {
+    fill: #eef1f4;
+}
+
+/*
+ * A click on a state zooms into it, see js/roadtrip.js: dividing
+ * by --zoom keeps lines and names at the same size on screen.
+ */
+.counties path {
+    fill: transparent;
+    stroke: #aab4bf;
+    stroke-width: calc(0.3px / var(--zoom, 1));
+    cursor: pointer;
+}
+
+.borders,
+.outline {
+    fill: none;
+    stroke: #7d8894;
+    stroke-width: calc(0.8px / var(--zoom, 1));
+    stroke-linejoin: round;
+    pointer-events: none;
+}
+
+/* js/roadtrip.js draws this around the county it names */
+.outline {
+    stroke: #2c3e50;
+    /* as wide on the screen of a phone as on a desktop */
+    stroke-width: 2px;
+    vector-effect: non-scaling-stroke;
+}
+
+.names text {
+    /* scripts/roadtripmap/main.go fits the names for this size */
+    font-size: calc(9px / var(--zoom, 1));
+    text-anchor: middle;
+    dominant-baseline: central;
+    fill: #8a94a0;
+    /* a white halo keeps a name readable on top of the lines */
+    paint-order: stroke;
+    stroke: #ffffff;
+    stroke-width: calc(2px / var(--zoom, 1));
+    pointer-events: none;
+}
+
+.names .zoomed {
+    display: none;
+}
+
+/* the abbreviations are bigger: they are for the small map of a phone */
+.abbreviated text {
+    font-size: calc(22px / var(--zoom, 1));
+    stroke-width: calc(4px / var(--zoom, 1));
+}
+
+.abbreviated {
+    display: none;
+}
+
+/* a phone has the abbreviations and no zoom, see js/roadtrip.js */
+@media (max-width: 640px) {
+    .counties path {
+        cursor: default;
+    }
+
+    .names {
+        display: none;
+    }
+
+    .names.abbreviated {
+        display: inline;
+    }
+}
+
+/*
+ * Visited: the states, their names and the counties. Green, as red
+ * and blue stand for the parties on a map of the US.
+ */
+#s51, #s47, #s54, #s11, #s24, #s42, #s12, #s02, #s15, #s06, #s32 {
+    fill: #cfe8d2;
+}
+
+#n51, #a51, #n47, #a47, #n54, #a54, #n11, #a11, #n24, #a24, #n42, #a42, #n12, #a12, #n02, #a02, #n15, #a15, #n06, #a06, #n32, #a32, #n13, #a13, #n49, #a49, #n53, #a53 {
+    fill: #2c3e50;
+    font-weight: bold;
+}
+
+#c51059, #c51153, #c51061, #c51187, #c51069, #c51171, #c51165, #c51660, #c51015, #c51163, #c51023, #c51161, #c51775, #c51121, #c51155, #c51197, #c51173, #c51191, #c51520, #c47163, #c47179, #c47059, #c47063, #c47089, #c47155, #c54031, #c54023, #c54093, #c11001, #c51013, #c24031, #c24033, #c24027, #c24005, #c24510, #c51139, #c51107, #c51043, #c54037, #c24021, #c24043, #c42055, #c42057, #c51047, #c51157, #c51113, #c12095, #c12069, #c12119, #c12083, #c12097, #c12105, #c12057, #c12103, #c12081, #c12115, #c12027, #c12015, #c12071, #c12021, #c12086, #c12087, #c12011, #c12099, #c12085, #c12111, #c12061, #c12093, #c02020, #c02170, #c02068, #c02122, #c15001, #c15003, #c06067, #c06017, #c06061, #c32031, #c32510, #c32005, #c06077, #c06099, #c06047, #c06085, #c06069, #c06053, #c06113, #c06095, #c06013, #c06001, #c06081, #c06075, #c06109, #c06043, #c06009, #c06005 {
+    fill: #3a9a5c;
+    stroke: #ffffff;
+}
+
+/* a second colour for the counties listed as "accent" */
+#c13121, #c49035, #c53033, #c53061 {
+    fill: #e09f1f;
+    stroke: #ffffff;
+}
+
+
+/* and a lighter shade of it for their states, unless they have other counties */
+#s13, #s49, #s53 {
+    fill: #f7e4b6;
+}
+
